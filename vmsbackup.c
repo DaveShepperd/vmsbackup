@@ -2428,7 +2428,7 @@ static int read_next_block( )
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.3, January 2023\n", progname );
+	printf ("%s version 3.4, January 2023\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-S <num>][-f <file>][-v <num>]\n",
 			 progname );
 	if ( full )
