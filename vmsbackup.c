@@ -110,6 +110,9 @@
  *  	off the file version number completely and only output
  *  	the latest version of any file.
  *
+ *  Version 3.5 - January 2024 (DMS)
+ *  	Added -L to provide lowercase directory and filenames
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -329,7 +332,7 @@ char last_char_written;
 #define SUMM_BUFFCOUNT	(15)	/* /BUFFER */
 
 int fd;				/* tape file descriptor */
-int cflag, dflag, eflag, iflag, Iflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag;
+int cflag, dflag, eflag, iflag, Iflag, lcflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag;
 int setnr, selset, skipSet, numHdrs, ss_errors, file_errors, total_errors;
 char selsetname[14];
 
@@ -748,7 +751,7 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		++p;
 	while ( *p )
 	{
-		if ( isupper ( *p ) )
+		if ( lcflag && isupper ( *p ) )
 			*q = tolower( *p );
 		else
 			*q = *p;
@@ -786,8 +789,6 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 	{
 		if ( *q == '.' )
 			ext = q;
-		if ( Rflag && islower(*q) )
-			*q = toupper(*q);	/* re-upcase the filename and filetype */
 		q++;
 	}
 	if ( Rflag && *q == ';' )
@@ -815,14 +816,10 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		}
 		*q = ';';
 	}
-	if ( cflag && !Rflag )
-	{
-		*q = ':';
-	}
-	else
-	{
+	if ( Rflag )
 		*q = '\0';
-	}
+	else if ( cflag )
+		*q = ':';
 	if ( procf )
 	{
 		if ( dirfile )
@@ -2428,7 +2425,7 @@ static int read_next_block( )
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.4, January 2023\n", progname );
+	printf ("%s version 3.5, January 2024\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-S <num>][-f <file>][-v <num>]\n",
 			 progname );
 	if ( full )
@@ -2439,10 +2436,11 @@ void usage ( const char *progname, int full )
 				 "    -e  Extract all files regardless of filetype.\n"
 				 "    -f tapefile 'tapefile' is name of input. (default: " DEF_TAPEFILE ")\n" );
 		printf(   "    -h or -? This message.\n"
-				  "    -i  Input is of type DVD disk image of tape.\n"
-				  "    -I  Input is of type SIMH format disk image of tape.\n"
+				  "    -i Input is of type DVD disk image of tape.\n"
+				  "    -I Input is of type SIMH format disk image of tape.\n"
+				  "    -l Lowercase all directory and filenames.\n"
 				  "    -n setname 'setname' is the saveset name as provided in the HDR1 record.\n"
-				  "    -R don't lowercase the filenames, strip off file version number and output only latest version.\n"
+				  "    -R Strip off file version number and output only latest version.\n"
 				  "    -s setnumber 'setnumber' is decimal saveset number as provided in a HDR1 record.\n"
 				  "    -S setnumber 'setnumber' is decimal as the count of HDR1 blocks starting at 1.\n"
 				  "    -t  List file contents to stdout.\n"
@@ -2497,7 +2495,7 @@ int main ( int argc, char *argv[] )
 	gargv = argv;
 	gargc = argc;
 	cflag = dflag = eflag = sflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = 0;
-	while ( ( c = getopt ( argc, argv, "cdef:hiIn:Rs:S:tv:wx" ) ) != EOF )
+	while ( ( c = getopt ( argc, argv, "cdef:hiIln:Rs:S:tv:wx" ) ) != EOF )
 	{
 		switch ( c )
 		{
@@ -2524,6 +2522,9 @@ int main ( int argc, char *argv[] )
 			break;
 		case 'I':
 			++Iflag;
+			break;
+		case 'l':
+			++lcflag;
 			break;
 		case 'n':
 			++nflag;
