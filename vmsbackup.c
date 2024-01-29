@@ -111,7 +111,11 @@
  *  	the latest version of any file.
  *
  *  Version 3.5 - January 2024 (DMS)
- *  	Added -L to provide lowercase directory and filenames
+ *  	Added -L to provide lowercase directory and filenames.
+ *
+ *  Version 3.6 - January 2024 (DMS)
+ *  	Added -E, reworked the -e option a bit.
+ *  	Fixed some comments.
  *
  *  Installation:
  *
@@ -143,7 +147,7 @@
 #include	<sys/file.h>
 
 extern int match ( const char *string, const char *pattern );
-int typecmp ( const char *str );
+static int typecmp ( const char *str, int which );
 
 /* Byte-swapping routines.  Note that these do not depend on the size
    of datatypes such as short, long, etc., nor do they require us to
@@ -332,7 +336,7 @@ char last_char_written;
 #define SUMM_BUFFCOUNT	(15)	/* /BUFFER */
 
 int fd;				/* tape file descriptor */
-int cflag, dflag, eflag, iflag, Iflag, lcflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag;
+int cflag, dflag, eflag, Eflag, iflag, Iflag, lcflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag;
 int setnr, selset, skipSet, numHdrs, ss_errors, file_errors, total_errors;
 char selsetname[14];
 
@@ -832,8 +836,10 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		}
 		else
 		{
-			if ( ext && !eflag && procf )
-				procf = typecmp ( ++ext );
+			if ( ext && !Eflag && procf )
+			{
+				procf = typecmp(++ext, eflag);
+			}
 		}
 	}
 	if ( procf && wflag )
@@ -864,30 +870,44 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
  * Compares the filename type in pointed to by str
  * with our list of file types to be ignored.
  */
+#ifndef n_elts
+#define n_elts(x) (int)(sizeof(x)/sizeof((x)[0]))
+#endif
 
-int typecmp ( const char *str )
+int typecmp ( const char *str, int which )
 {
-	static const char * const type[] = {
-		"exe",			/* vms executable image */
-		"lib",			/* vms object library */
-		"obj",			/* rsx object file */
+	static const char * const Types1[] = {
+		"dir",			/* directory file */
+#if 0
+		"exe",			/* executable image */
+		"lib",			/* object library */
+		"obj",			/* object file */
+#endif
 		"odl",			/* rsx overlay description file */
 		"olb",			/* rsx object library */
+		"mai",			/* mail file */
 		"pmd",			/* rsx post mortem dump */
-		"stb",			/* rsx symbol table */
 		"sys",			/* rsx bootable system image */
+		"tlb",			/* ? */
+		"tlo",			/* ? */
 		"tsk",			/* rsx executable image */
-		"dir",
 		"upd",
-		"tlo",
-		"tlb",
 		NULL			/* null string terminates list */
 	};
-	int ii;
-	
-	for (ii=0; type[ii]; ++ii )
-		if ( strncasecmp ( str, type[ii], 3 ) == 0 )
-			return( 0 );   /* found a match, file to be ignored */
+	static const char * const Types2[] = {
+		"mai",
+		"dir",
+		NULL
+	};
+
+	if ( which == 0 || which == 1 )
+	{
+		int ii;
+		const char * const *type = which ? Types2 : Types1;
+		for (ii=0; *type; ++ii, ++type )
+			if ( strncasecmp ( str, *type, 3 ) == 0 )
+				return( 0 );   /* found a match, file to be ignored */
+	}
 	return( 1 );	   /* no match found */
 }
 
@@ -2433,7 +2453,8 @@ void usage ( const char *progname, int full )
 		printf ( "Where {} indicates one option is required, [] indicates optional and <> indicates parameter:\n"
 				 "    -c  Convert VMS filename version delimiter ';' to ':'\n"
 				 "    -d  Maintain VMS directory structure during extraction.\n"
-				 "    -e  Extract all files regardless of filetype.\n"
+				 "    -e  Extract all files regardless of filetype (except .dir and .mai).\n"
+				 "    -E  Extract all files regardless of filetype (including .dir and .mai).\n"
 				 "    -f tapefile 'tapefile' is name of input. (default: " DEF_TAPEFILE ")\n" );
 		printf(   "    -h or -? This message.\n"
 				  "    -i Input is of type DVD disk image of tape.\n"
@@ -2494,8 +2515,8 @@ int main ( int argc, char *argv[] )
 	}
 	gargv = argv;
 	gargc = argc;
-	cflag = dflag = eflag = sflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = 0;
-	while ( ( c = getopt ( argc, argv, "cdef:hiIln:Rs:S:tv:wx" ) ) != EOF )
+	cflag = dflag = eflag = Eflag = sflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = 0;
+	while ( ( c = getopt ( argc, argv, "cdeE:f:hiIln:Rs:S:tv:wx" ) ) != EOF )
 	{
 		switch ( c )
 		{
@@ -2507,6 +2528,9 @@ int main ( int argc, char *argv[] )
 			break;
 		case 'e':
 			++eflag;
+			break;
+		case 'E':
+			++Eflag;
 			break;
 		case 'f':
 			tapefile = optarg;
