@@ -1,10 +1,13 @@
 #
 #
-#REMOTE=-DREMOTE			# -DREMOTE  use remote tape
-SWAP=				# -DSWAP swap bytes
 CC= gcc
-CFLAGS= $(SWAP) $(REMOTE) -Wall -g -m32 #-O -DDEBUG #-ansi -pedantic 
-LFLAGS= -m32
+DEFS= -DHAVE_STRERROR #-DSWAP -DREMOTE
+MACH= -m32
+OPT= #-O2
+DBG= -g #-DDEBUG
+WARNS= -Wall #-ansi -pedantic
+CFLAGS= $(DEFS) $(MACH) $(OPT) $(DBG) $(WARNS) 
+LFLAGS= $(MACH)
 LIBS= -lrmt   			# remote magtape library
 OWNER=tar			# user for remote tape access
 MODE=4755
