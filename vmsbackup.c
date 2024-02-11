@@ -1310,13 +1310,6 @@ void process_file ( unsigned char *buffer, int rsize )
 		}
 		if ( file.directory
 			 || (file.recfmt&FAB_dol_M_MAIL)
-#if 0
-			 || (   !file.recsize 
-					&& (   file.recfmt == FAB_dol_C_VAR
-						   || file.recfmt == FAB_dol_C_VFC
-					   )
-				)
-#endif
 		   )
 		{
 			skipping |= SKIP_TO_FILE;	/* ignore this file since the types are bogus */
