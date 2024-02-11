@@ -5,7 +5,7 @@
 /**
  *
  * @mainpage
- * @version Nov_2023
+ * @version Feb_2024
  * @par Read Me
  *
  *  Title:
@@ -20,10 +20,12 @@
  *  		(version Mar_2003 with snipits from Sven-Ove's
  *  		version 4-1-1)
  *
+ *  https://github.com/DaveShepperd/vmsbackup
+ *
  *  Net-addess (as of 1986 or so; it is highly unlikely these still work):
  *	john%monu1.oz@seismo.ARPA
  *	luthcad!sow@enea.UUCP
- *	dshepperd@mindspring.com
+ *  vmsbackup@dshepperd.com
  *
  *  History:
  *	Version 1.0 - September 1984
@@ -117,6 +119,10 @@
  *  	Added -E, reworked the -e option a bit.
  *  	Fixed some comments.
  *
+ *  Version 3.7 - Feburary 2024 (DMS)
+ *  	Added support for optional VFC decode in output.
+ *  	Changed the way it handles record delimiters.
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -136,7 +142,9 @@
 #include	<getopt.h>
 #include	<time.h>
 #include	<utime.h>
-
+#if HAVE_STRERROR
+#include	<errno.h>
+#endif
 #include	<sys/ioctl.h>
 #include	<sys/types.h>
 #ifdef REMOTE
@@ -234,6 +242,14 @@ struct bsa
 	char bsa_dol_t_text[1];
 };
 
+typedef enum
+{
+	GET_IDLE,
+	GET_RCD_COUNT,
+	GET_VFC,
+	GET_DATA
+} FileState_t;
+
 struct file_details
 {
 	time_t ctime;
@@ -242,7 +258,7 @@ struct file_details
 	time_t btime;
 	FILE *extf;
 	int directory;
-	int size;
+	unsigned int size;
 	int nblk;
 	int lnch;
 	int allocation;
@@ -250,7 +266,8 @@ struct file_details
 	int grp;
 	int recfmt;
 	int recatt;
-	int count;
+	unsigned int inboundIndex;		/* Index into specific byte in input file */
+	unsigned int outboundIndex;		/* Index into specific byte in output file */
 	int rec_count;
 	int rec_padding;
 	int vfcsize;
@@ -259,6 +276,11 @@ struct file_details
 	unsigned short reclen;
 	short fix;
 	unsigned short recsize;
+	int do_vfc;
+	unsigned char vfc0, vfc1;
+	int do_rat;
+	int do_binary;
+	FileState_t file_state;
 } file;
 
 #ifndef DEF_TAPEFILE
@@ -267,7 +289,6 @@ struct file_details
 char *tapefile = DEF_TAPEFILE;
 
 time_t secs_adj;
-char last_char_written;
 
 #define	FAB_dol_C_RAW	0	/* undefined */
 #define	FAB_dol_C_FIX	1	/* fixed-length record */
@@ -336,7 +357,7 @@ char last_char_written;
 #define SUMM_BUFFCOUNT	(15)	/* /BUFFER */
 
 int fd;				/* tape file descriptor */
-int cflag, dflag, eflag, Eflag, iflag, Iflag, lcflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag;
+int cflag, dflag, eflag, Eflag, iflag, Iflag, lcflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag, vfcflag;
 int setnr, selset, skipSet, numHdrs, ss_errors, file_errors, total_errors;
 char selsetname[14];
 
@@ -738,13 +759,13 @@ static void remove_dups( void )
  * Opens an output file only if in extract mode.
  */
 
-static char lastFileName[16];
+static char lastFileName[256];
 static int lastVersionNumber;
 
 static FILE *openfile ( char *ufn, char *fn, int dirfile )
 {
 	char ans[80];
-	char *p, *q, s, *ext = NULL, *justFileName;
+	char *p, *q, s, *ext = NULL; /*, *justFileName; */
 	int procf;
 
 	procf = 1;
@@ -782,7 +803,7 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		++q;
 	}
 	++q;	/* ufn points to path and q points to start of filename. */
-	justFileName = q;
+/*	justFileName = q; */
 	if ( !dflag )
 	{
 		strcpy( ufn, q );	/* not keeping the directory structure */
@@ -803,7 +824,7 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		if ( !endp || *endp )
 			curVersion = 0;
 		*q = 0;
-		if ( curVersion && !strcmp(lastFileName,justFileName) )
+		if ( curVersion && !strcmp(lastFileName,ufn) )
 		{
 			if ( curVersion < lastVersionNumber )
 			{
@@ -815,7 +836,7 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		}
 		else
 		{
-			strncpy(lastFileName,justFileName,sizeof(lastFileName));
+			strncpy(lastFileName,ufn,sizeof(lastFileName));
 			lastVersionNumber = curVersion;
 		}
 		*q = ';';
@@ -929,16 +950,24 @@ static void close_file( void )
 /*    rfmt = file.recfmt&0x1f; */
 	if ( !file.directory && !(file.recfmt&FAB_dol_M_MAIL) )
 	{
-		if ( (xflag || file.count) && file.count != file.size )
+		if ( (xflag || file.inboundIndex) && file.inboundIndex != file.size )
 		{
 			printf( "Snark: '%s' file size is not correct. Is %d, should be %d. May be corrupt.\n",
-					file.name, file.count, file.size );
+					file.name, file.inboundIndex, file.size );
 			++file_errors;
 		}
 		if ( (vflag & VERB_FILE_RDLVL) )
 		{
-			printf( "File size: %d, count: %d, padding: %d, rec_count: %d\n",
-					file.size, file.count, file.rec_padding, file.rec_count );
+			printf( "File size: %d(0x%X), inboundIndex: %d(0x%X), outbountIndex: %d(0x%X), padding: %d, rec_count: %d\n",
+					 file.size
+					,file.size
+					,file.inboundIndex
+					,file.inboundIndex
+					,file.outboundIndex
+					,file.outboundIndex
+					,file.rec_padding
+					,file.rec_count
+					);
 		}
 	}
 	if ( file.extf != NULL )	/* if file previously opened */
@@ -949,21 +978,29 @@ static void close_file( void )
 		ut.actime = file.atime;
 		ut.modtime = file.mtime;
 		utime( file.ufname, &ut );
-		if ( file_errors )
+		
+		if ( file.do_binary || file_errors )
 		{
-			char refilename[MAX_FILENAME_LEN+32];
-
-			printf( "Snark: close_file(): %d error%s during extract of \"%s\"\n",
-					file_errors, file_errors > 1 ? "s" : "",
-					file.ufname );
+			char refilename[MAX_FILENAME_LEN+32+16];
 			strcpy( refilename, file.ufname );
-			strcat( refilename, ".may_be_corrupt" );
-			rename( file.ufname, refilename );
+			if ( file.do_binary )
+			{
+				strcat( refilename, ".binary" );
+				rename( file.ufname, refilename );
+				printf( "Snark: close_file(): Forced binary mode. Renamed '%s' to '%s'\n",
+						 file.ufname ,refilename );
+			}
+			if ( file_errors )
+			{
+				strcat( refilename, ".may_be_corrupt" );
+				rename( file.ufname, refilename );
+				printf( "Snark: close_file(): Found file errors during copy. Renamed '%s' to '%s'\n",
+						 file.ufname ,refilename );
+			}
 		}
 	}
 	memset( &file, 0, sizeof( file ) );
 	file_errors = 0;
-	last_char_written = 0;
 }
 
 /**
@@ -1273,11 +1310,13 @@ void process_file ( unsigned char *buffer, int rsize )
 		}
 		if ( file.directory
 			 || (file.recfmt&FAB_dol_M_MAIL)
+#if 0
 			 || (   !file.recsize 
 					&& (   file.recfmt == FAB_dol_C_VAR
 						   || file.recfmt == FAB_dol_C_VFC
 					   )
 				)
+#endif
 		   )
 		{
 			skipping |= SKIP_TO_FILE;	/* ignore this file since the types are bogus */
@@ -1288,6 +1327,14 @@ void process_file ( unsigned char *buffer, int rsize )
 			return;
 		}
 
+		file.do_rat = (file.recatt&((1<<FAB_dol_V_FTN)|(1<<FAB_dol_V_CR)|(1<<FAB_dol_V_PRN)));
+		file.do_binary = 0;
+		if ( (file.recfmt & 0x1F) == FAB_dol_C_VAR && !file.do_rat )
+		{
+			printf( "Snark: process_file(): File %s is set to variable but without any record attibutes. Setting it to binary\n", file.ufname );
+			file.recfmt = FAB_dol_C_RAW;
+			file.do_binary = 1;
+		}
 		if ( xflag )
 		{
 			/* open file */
@@ -1503,16 +1550,31 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 
 void process_vbn ( unsigned char *buffer, unsigned short rsize )
 {
-	int cc, ii, tlen;
-
-	ii = 0;
-	if ( (vflag & VERB_LVL) )
+	int buffIndex, tlen;
+	
+	buffIndex = 0;
+	if ( (vflag & (VERB_LVL|VERB_FILE_RDLVL|VERB_FILE_WRLVL)) )
 	{
-		printf("process_vbn(): Entry rsize=%d. recFmt=%d, recCnt=%d, count=%d. buff: %02X %02X %02X %02X ...\n",
-			   rsize, file.recfmt, file.rec_count, file.count,
-			   buffer[0], buffer[1], buffer[2], buffer[3] );
+		printf("process_vbn(): Entry rsize=%d(0x%0X). recfmt=%d, recatt=0x%02X, rec_count=%d, do_binary=%d, do_rat=%d, file_state=%d\n",
+			    rsize
+			   ,rsize
+			   ,file.recfmt
+			   ,file.recatt
+			   ,file.rec_count
+			   ,file.do_binary
+			   ,file.do_rat
+			   ,file.file_state
+			   );
+		printf("\tinboundIndex=%d(0x%X), file_size=%d(0x%X), buff: %02X %02X %02X %02X %02X %02X %02X %02X ...\n",
+			    file.inboundIndex
+			   ,file.inboundIndex
+			   ,file.size
+			   ,file.size
+			   ,buffer[0], buffer[1], buffer[2], buffer[3]
+			   ,buffer[4], buffer[5], buffer[6], buffer[7]
+			   );
 	}
-	if ( file.count >= file.size )
+	if ( file.inboundIndex >= file.size )
 	{
 		if ( !strlen( file.name ) )
 		{
@@ -1521,218 +1583,392 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 		}
 		else
 			printf( "Snark: process_vbn(): Filesize of %s is too big. Is %d, expected %d\n",
-					file.name, file.count, file.size );
+					file.name, file.inboundIndex, file.size );
 	}
-	while ( file.count + ii < file.size && ii < rsize )
+	while ( file.inboundIndex < file.size && buffIndex < rsize )
 	{
 		switch ( (file.recfmt&0x1F) )
 		{
 		case FAB_dol_C_STM:
 		case FAB_dol_C_STMLF:
+		case FAB_dol_C_STMCR:
 		case FAB_dol_C_FIX:
 		case FAB_dol_C_FIX11:
 		case FAB_dol_C_RAW:
 			file.reclen = rsize;		/* assume max */
-			if ( file.count + file.reclen > file.size )
-				file.reclen = file.size - file.count;
+			if ( file.inboundIndex + file.reclen > file.size )
+				file.reclen = file.size - file.inboundIndex;
 			if ( file.extf )
 			{
 				if ( (vflag & VERB_FILE_WRLVL) )
-					printf( "Writing %4d bytes. recfmt=%d\n", file.reclen, file.recfmt );
-				fwrite( buffer+ii, 1, file.reclen, file.extf );
+				{
+					printf( "Writing %4d(0x%X) bytes. buffIndex=%d(0x%X), inboundIndex=%d(0x%X), outboundIndex=%d(0x%X), recfmt=%d, recatt=0x%02X\n",
+							 file.reclen
+							,file.reclen
+							,buffIndex
+							,buffIndex
+						    ,file.inboundIndex
+							,file.inboundIndex
+							,file.outboundIndex
+							,file.outboundIndex
+							,file.recfmt
+							,file.recatt
+							);
+				}
+				if ( fwrite(buffer + buffIndex, 1, file.reclen, file.extf) != file.reclen )
+				{
+#if HAVE_STRERROR
+					printf("snark: Failed to write (fixed length) %d bytes to '%s': %s\n", file.reclen, file.name, strerror(errno));
+#else
+					perror("snark: Failed to write record");
+#endif
+					file.inboundIndex = file.size;
+					skipping |= SKIP_TO_FILE;
+					file.file_state = GET_IDLE;
+					return;
+				}
+				file.outboundIndex += file.reclen;
 			}
-			ii += file.reclen;
+			buffIndex += file.reclen;
+			file.inboundIndex += file.reclen;
 			file.reclen = 0;
-			break;
+			continue;
 
 		case FAB_dol_C_VAR:
 		case FAB_dol_C_VFC:
-			if ( file.reclen == 0 )
+			switch (file.file_state)
 			{
-				file.reclen = getu16( (unsigned char *)buffer + ii );
-				ii += 2;
-				++file.rec_count;
-				if ( (vflag & VERB_FILE_RDLVL) )
-					printf ( "New record mark: reclen = %5d, ii = %5d, rsize = %5d\n",
-							 file.reclen, ii-2, rsize );
-				file.fix = file.reclen;
-				if ( !file.reclen )		/* if blank line */
+			case GET_IDLE:
+				if ( file.reclen != 0 )
 				{
-					if ( file.extf )
-					{
-						if ( (vflag & VERB_FILE_WRLVL) )
-							printf( "Writing blank line. recfmt=%d\n", file.recfmt );
-						fputc( '\n', file.extf );
-					}
-					last_char_written = '\n';
+					file.file_state = GET_DATA;
+					continue;
 				}
+				file.file_state = GET_RCD_COUNT;
+//				Fall through to GET_RCD_COUNT
+			case GET_RCD_COUNT:
+				file.reclen = getu16( (unsigned char *)buffer + buffIndex );
+				buffIndex += 2;
+				file.inboundIndex += 2;		/* This has to match all bytes found in file */
+				file.file_state = ((file.recfmt&0x1F) == FAB_dol_C_VFC && file.vfcsize == 2) ? GET_VFC:GET_DATA;
+				if ( (vflag & VERB_FILE_RDLVL) )
+				{
+					printf ( "New record mark: GET_RCD_COUNT: reclen = %5d(0x%04X), buffIndex = %5d(0x%04X), rsize = %5d(0x%04X), rec_count=%d, nextState=%d\n",
+							  file.reclen
+							 ,file.reclen
+							 ,buffIndex-2
+							 ,buffIndex-2
+							 ,rsize
+							 ,rsize
+							 ,file.rec_count
+							 ,file.file_state
+							 );
+				}
+				++file.rec_count;
+				file.fix = file.reclen;
+				file.do_vfc = 0;
 				if ( file.reclen == 0xFFFF )
 				{
 					if ( (vflag & VERB_FILE_RDLVL) )
-						printf( "Reached EOF. recfmt=%d, reclen=%d. ii=%d, file.count=%d, count+ii=%d, file.padding=%d, file.size=%d. Skipping to next file.\n",
-								file.recfmt, file.reclen, ii, file.count, file.count+ii, file.rec_padding, file.size );
-					file.count += ii;
-					if ( file.count > file.size )
-						printf("Snark: '%s' file count, %d, exceeded file size, %d by %d bytes on '%s'\n", file.name, file.count, file.size, file.count-file.size, file.name );
-					file.count = file.size;
+					{
+						printf("Reached EOF. inboundIndex=%d(0x%X), file.size=%d(0x%X), buffIndex=%d(0x%X), rsize=%d(0x%X), inboundIndex+(rsize-buffIndex)=%d(0x%X)",
+							    file.inboundIndex
+							   ,file.inboundIndex
+							   ,file.size
+							   ,file.size
+							   ,buffIndex
+							   ,buffIndex
+							   ,rsize
+							   ,rsize
+							   ,file.inboundIndex+(rsize-buffIndex)
+							   ,file.inboundIndex+(rsize-buffIndex)
+							   );
+						printf( "\trecfmt=%d, reclen=%d(0x%X), recatt=0x%02X, file.padding=%d. Skipping to next file.\n",
+								 file.recfmt
+								,file.reclen
+								,file.reclen
+								,file.recatt
+								,file.rec_padding
+								 );
+					}
+					if ( file.inboundIndex > file.size )
+						printf("Snark: '%s' file count, %d, exceeded file size, %d by %d bytes on '%s'\n", file.name, file.inboundIndex, file.size, file.inboundIndex-file.size, file.name );
+					file.inboundIndex = file.size;
 					skipping |= SKIP_TO_FILE;
+					file.file_state = GET_IDLE;
 					return;
 				}
 				if ( file.reclen > file.recsize+file.vfcsize )
 				{
-					int curLen,lftOvr;
-					
-					printf( "Snark: '%s' (ii=%d) record length of %d (0x%04X;'%c','%c') is invalid. Must be %d >= x >= 0. Converting file type from %d to %d(RAW) to finish write.\n",
+					printf( "Snark: '%s' (buffIndex=%d(0x%X)) record length of %d (0x%04X;'%c','%c') is invalid. Must be %d >= x >= 0. Converting file type from %d to %d(RAW) to finish write.\n",
 							file.name,
-							ii,
+							buffIndex,
+							buffIndex,
 							file.reclen, file.reclen, isprint(file.reclen&0xFF) ? (file.reclen&0xFF) : '.', isprint((file.reclen>>8)&0xFF) ? (file.reclen>>8)&0xFF : '.',
 							file.recsize, file.recfmt, FAB_dol_C_RAW );
-#if 1
 					file.recfmt = FAB_dol_C_RAW;
-					ii -= 2;					/* backup over the record length */
-					curLen = ii;				/* how many bytes already written */
-					lftOvr = rsize-curLen;		/* how many bytes left in buffer */
-					if ( lftOvr > file.size-(file.count+curLen) )
-						lftOvr = file.size-file.count-curLen; /* how many bytes left to write */
-					file.reclen = lftOvr;
-					if ( file.extf )
-					{
-						printf( "Snark: '%s' Writing %4d (remaining?) bytes in an effort to save as much data as possible. ii=%d, rsize=%d, file.count=%d, file.size=%d, curLen=%d, lftOvr=%d\n",
-								file.name, file.reclen, ii, rsize, file.count, file.size, curLen, lftOvr );
-						fwrite( buffer+ii, 1, file.reclen, file.extf );
-					}
-					else if ( (vflag&VERB_FILE_WRLVL) )
-						printf( "Snark: '%s' Would have written %4d (remaining?) bytes in an effort to save as much data as possible. ii=%d, rsize=%d, file.count=%d, file.size=%d, curLen=%d, lftOvr=%d\n",
-								file.name, file.reclen, ii, rsize, file.count, file.size, curLen, lftOvr );
-					ii += file.reclen;
-					file.reclen = 0;
-					break;
-#else
-						if ( !file.count )	/* if this is the first record */
-						{
-							int jj;
-							jj = ii;			/* save our starting position */
-							ii -= 2;			/* backup over what should have been the record len */
-							while ( jj < rsize && jj-ii < file.recsize+file.vfcsize )
-							{
-								file.reclen = getu16( (unsigned char *)buffer + jj );
-								if ( file.reclen <= file.recsize+file.vfcsize )
-									break;
-								jj += 2;
-							}                       
-							if ( file.reclen <= file.recsize+file.vfcsize || jj >= rsize )
-							{
-								if ( file.extf )
-								{
-									if ( (vflag & VERB_FILE_WRLVL) )
-										printf( "Snark: Writing %4d bytes (recover from backup error). recfmt=%d\n", jj-ii, file.recfmt );
-									fwrite( buffer+ii, 1, jj-ii, file.extf ); /* write the first part of the record */
-								}
-								else if ( (vflag & VERB_FILE_WRLVL) )
-									printf( "Snark: Would have written %4d bytes (recover from backup error). recfmt=%d\n", jj-ii, file.recfmt );
-								ii = jj;			/* set next record starting position */
-								file.reclen = 0;		/* force a start of next record */
-								continue;			/* and keep looking */
-							}
-						}
-						skipping |= SKIP_TO_FILE;
-						++file_errors;
-						++ss_errors;
-						return;
-#endif
+					buffIndex -= 2;					/* backup over the record length */
+					continue;
 				}
-			}
-			tlen = file.reclen;		/* assume we can write all of it */
-			if ( tlen+ii > rsize )	/* if record overflows buffer */
-				tlen = rsize-ii;	/* trim to remaining buffer size */
-			if ( file.count + tlen > file.size )
-			{
-				printf( "Snark: '%s' process_vbn(): May be a problem with file.\n", file.name );
-				printf( "Snark: '%s' process_vbn(): Writing %d bytes more than filesize says to.\n",
-						file.name, file.count+tlen - file.size );
-			}
-/*
- * TODO:
- * Figure out the fortran carriage control options and
- * fixup the output appropriately. In the meantime, just
- * include the vfc data in the output record without
- * modification.
- */
-			if ( file.extf )
-			{
-				if ( (vflag & VERB_FILE_WRLVL) )
-					printf( "Writing %4d bytes. recfmt=%d, reclen=%d\n", tlen, file.recfmt, file.reclen );
-				fwrite( buffer+ii, 1, tlen, file.extf ); /* write as much as we can at once */
-			}
-			file.reclen -= tlen;	/* take from total */
-			ii += tlen;			/* advance index */
-			if ( !file.reclen )
-				last_char_written = buffer[ii-1];
-			if ( file.extf && !file.reclen && last_char_written != '\f' )
-			{
-				fputc( '\n', file.extf );	/* follow with newline if appropriate */
-				last_char_written = '\n';
-			}
-			if ( !file.reclen && (ii&1) )	/* if we've used all the data and index is odd */
-			{
-				++ii;				/* round it up (all records are padded to even length) */
-				++file.rec_padding;		/* this doesn't get charged against file size */
-			}
-			break;
-
-		case FAB_dol_C_STMCR:
-			{
-				unsigned char *src = buffer + ii;	/* point to record */
-				tlen = rsize;		/* assume max size */
-				while ( tlen )		/* substitute all \r with \n */
+				if ( file.inboundIndex < file.size )
+					continue;
+				break;
+			case GET_VFC:
+				file.vfc0 = buffer[buffIndex];
+				file.vfc1 = buffer[buffIndex+1];
+				/* vfcflag == 0, eat the vfc bytes and do normal text processing if appropriate.
+				 *            1, process the vfc characters and insert nl's, cr's and ff's as requested.
+				 *            2, just put the 2 vfc bytes in the output record unchanged.
+				 */
+				if ( vfcflag == 1 )
 				{
-					cc = *src;
-					if ( cc == '\r' )
-						*src = '\n';
-					++src;
-					--tlen;
+					file.do_vfc = 1;			/* do vfc handling */
+					buffIndex += 2;
+					file.reclen -= 2;
 				}
-				tlen = rsize;
-				if ( file.count + tlen > file.size )
-					tlen = file.size - file.count;
+				else if ( vfcflag != 2 )
+				{
+					buffIndex += 2;			/* eat the VFC bytes */
+					file.reclen -= 2;
+				}
+				file.inboundIndex += 2;		/* VFC bytes get counted in the running index */
+				if ( (vflag & VERB_FILE_RDLVL) )
+					printf ( "New record mark: GET_VFC: reclen = %5d, buffIndex = %5d(0x%04X), rsize = %5d(0x%04X), vfc0=0x%02X, vfc1=0x%02X\n",
+							 file.reclen, buffIndex-2, buffIndex-2, rsize, rsize, file.vfc0, file.vfc1 );
+				if ( file.do_vfc )
+				{
+					static const char OneNl[]="\n";
+					const char *preCode;
+					int preNum;
+
+					/* So here's an attempt at handling fortran carriage control */
+					preCode = NULL;
+					preNum = 0;
+					/* vfc0 spec. Char has:
+					 *  0  - (as in nul) no carriage control
+					 * ' ' - (space) Normal: \n followed by text followed by \r
+					 * '$' - Prompt: \n followed by text, no \r at end of line
+					 * '+' - Overstrike: text followed by \r
+					 * '0' - Double space: \n \n followed by text followed by \r
+					 * '1' - Formfeed: \f followed by text followed by \r
+					 * any - any other is same as Normal above 
+					 * Despite the comments above about the end-of-record
+					 * char, it is determined by vfc1 and handled separately below.
+					 */
+					switch (file.vfc0)
+					{
+					case 0:				/* No carriage control at all on this record */
+						break;
+					default:
+					case ' ':			/* normal. \n text \cr */
+						preCode = OneNl;
+						preNum = 1;
+						break;
+					case '$':			/* Prompt: \n - buffer */
+						preCode = OneNl;
+						preNum = 1;
+						break;
+					case '+':			/* Overstrike: buffer - \r */
+						break;
+					case '0':			/* Double space: \n\n text \r */
+						preCode = "\n\n";
+						preNum = 2;
+						break;
+					case '1':
+						preCode = "\f";	/* \f - buffer - \r */
+						preNum = 1;
+						break;
+					}
+					if ( file.extf && preNum && preCode )
+					{
+						if ( (vflag & VERB_FILE_WRLVL)  )
+						{
+							printf("Writing %d byte%s of leading VFC. vfc0=0x%02X, vfc1=0x%02X, preCode[0]=0x%02X\n",
+									preNum,
+									preNum == 1 ? "":"s",
+									file.vfc0,
+									file.vfc1,
+									preCode[0] );
+						}
+						if ( fwrite(preCode, 1, preNum, file.extf) != preNum ) /* write it */
+						{
+#if HAVE_STRERROR
+							printf("snark: Failed to write (vfc header) %d byte(s) to '%s': %s\n", preNum, file.name, strerror(errno));
+							file.inboundIndex = file.size;
+							skipping |= SKIP_TO_FILE;
+							file.file_state = GET_IDLE;
+#else
+							perror("snark: Failed to write vfc header");
+#endif
+							return;
+						}
+						file.outboundIndex += preNum;
+					}
+				}
+				file.file_state = GET_DATA;
+				if ( file.inboundIndex < file.size )
+					continue;
+				break;
+			case GET_DATA:
+				break;
+			}
+			/* End of switch(file_state) */
+			tlen = file.reclen;		/* assume whole record is in buffer */
+			if ( tlen+buffIndex > rsize )	/* if record length is longer than what's in the buffer */
+				tlen = rsize-buffIndex;	/* trim to remaining buffer size */
+			if ( tlen )
+			{
+				/* If there's something to write */
+				if ( file.inboundIndex + tlen > file.size )
+				{
+					printf( "Snark: '%s' process_vbn(): May be a problem with file.\n", file.name );
+					printf( "Snark: '%s' process_vbn(): Attempt to write %d bytes more than filesize says to. Trimming to %d\n",
+							file.name, file.inboundIndex+tlen - file.size, file.size-file.inboundIndex );
+					tlen = file.size-file.inboundIndex;
+				}
 				if ( file.extf )
 				{
 					if ( (vflag & VERB_FILE_WRLVL) )
-						printf( "Writing %4d bytes. recfmt=%d\n", tlen, file.recfmt );
-					fwrite( buffer + ii, 1, tlen, file.extf ); /* write the whole thing at once */
+					{
+						printf( "Writing %4d byte%s. recfmt=%d, recatt=0x%02X, reclen=%d(0x%X)\n",
+								tlen, tlen == 1 ? "":"s", file.recfmt, file.recatt, file.reclen, file.reclen );
+					}
+					if ( fwrite( buffer+buffIndex, 1, tlen, file.extf ) != tlen) /* write as much as we can at once */
+					{
+#if HAVE_STRERROR
+						printf("snark: Failed to write (var/vfc record) %d bytes to '%s': %s\n", tlen, file.name, strerror(errno));
+#else
+						perror("snark: Failed to write var/vfc record");
+#endif
+						file.inboundIndex = file.size;
+						skipping |= SKIP_TO_FILE;
+						file.file_state = GET_IDLE;
+						return;
+					}
+					file.outboundIndex += tlen;
 				}
-				ii += tlen;
-				file.reclen = 0;
-				break;
+				buffIndex += tlen;				/* advance index */
+				file.reclen -= tlen;	/* take from remaining record length */
+				file.inboundIndex += tlen;
 			}
+			if ( !file.reclen )
+			{
+				/* We've reached a blank line */
+				if ( file.extf )
+				{
+					/* If record attributes indicate to terminate line */
+					if ( file.do_vfc )
+					{
+						/* vfc1 spec. Bits:
+						 * 7 6 5 4 3 2 1 0
+						 * 0 0 0 0 0 0 0 0 - no trailing character
+						 * 0 x x x x x x x - bits 6-0 indicate how many nl's to output followed by a cr
+						 * 1 0 0 x x x x x - bits 4-0 describe the end-of-record char (normally a 0x0D
+						 * 1 0 1 x x x x x - all other conditions = just one cr
+						 * 1 1 0 0 x x x x - bits 3-0 describe bits to send to VFU. If no VFU, just one cr 
+						 * 1 1 0 1 x x x x - all other conditions = just one cr
+						 * 1 1 1 x x x x x - all other conditions = just one cr
+						 */
+						if ( file.vfc1 )
+						{
+							char nls[128];
+							int postNum=0;
+							const char *postCode=NULL;
+							int code = file.vfc1>>5;	/* get top 3 bits of vfc1 */
+							switch ((code&7))
+							{
+							case 0:
+							case 1:
+							case 2:
+							case 3:
+								memset(nls,'\n',file.vfc1);	/* assume nl's */
+								nls[file.vfc1] = '\r';		/* a cr always follows all the nl's */
+								postCode = nls;
+								postNum = file.vfc1+1;
+								break;
+							case 4:
+								nls[0] = file.vfc1&0x1F;
+								postCode = nls;
+								postNum = 1;
+								break;
+							case 5: /* Not used*/
+							case 6: /* special VFU stuff (not used) */
+							case 7:	/* Not used */
+								nls[0] = '\r';
+								postCode = nls;
+								postNum = 1;
+								break;
+							}
+							if ( postNum && postCode )
+							{
+								if ( (vflag & VERB_FILE_WRLVL) )
+									printf( "Writing %d byte%s of VFC tail. vfc1=0x%02X, postCode[0]=0x%02X\n",
+											postNum, postNum == 1 ? "":"s", file.vfc1, postCode[0] );
+								if ( fwrite(postCode, 1, postNum, file.extf) != postNum ) /* write trailing character(s) */
+								{
+#if HAVE_STRERROR
+									printf("snark: Failed to write (vfc trailer) %d bytes to '%s': %s\n", postNum, file.name, strerror(errno));
+#else
+									perror("snark: Failed to write (vfc trailer)");
+#endif
+									file.inboundIndex = file.size;
+									skipping |= SKIP_TO_FILE;
+									file.file_state = GET_IDLE;
+									return;
+								}
+								file.outboundIndex += postNum;
+							}
+						}
+					}
+					else if ( file.do_rat )
+					{
+						if ( (vflag & VERB_FILE_WRLVL) )
+							printf( "    Writing 1 byte 0x0A due to rat=0x%02X\n", file.do_rat );
+						fputc( '\n', file.extf );	/* follow with newline if appropriate */
+					}
+				}
+				if ( ((file.recfmt & 0x1F) == FAB_dol_C_VAR || (file.recfmt & 0x1F) == FAB_dol_C_VFC)  )
+				{
+					if ( (buffIndex & 1) )
+					{
+						++buffIndex;			/* round it up (all records are padded to even length) */
+						++file.rec_padding;		/* this doesn't get charged against file size */
+						++file.inboundIndex;	/* keep track of every byte found in input file */
+					}
+					file.file_state = GET_RCD_COUNT;	/* expect record count next */
+				}
+			}
+			break;
 
 		default:
 			++ss_errors;
 			++file_errors;
 			skipping |= SKIP_TO_FILE;
-			printf ( "Snark: '%s' process_vbn(): Invalid record format = %d, file.count=%d, ii=%d, file.size=%d\n",
-					 file.name, file.recfmt, file.count, ii, file.size );
+			printf ( "Snark: '%s' process_vbn(): Invalid record format = %d, file.inboundIndex=%d(0x%X), buffIndex=%d(0x%X), file.size=%d(0x%X)\n",
+					 file.name, file.recfmt, file.inboundIndex, file.inboundIndex, buffIndex, buffIndex, file.size, file.size );
 			return;
 		}
 	}
-	if ( file.count+ii > file.size )
+	if ( file.inboundIndex > file.size )
 	{
-		printf("Snark: '%s' process_vbn(): Hey, we've got a problem: record format=%d, ii=%d, file.count=%d, file.size=%d\n",
-			   file.name, file.recfmt, ii, file.count, file.size );
+		printf("Snark: '%s' process_vbn(): Hey, we've got a problem: record format=%d, buffIndex=%d, file.inboundIndex=%d(0x%X), file.size=%d(0x%X)\n",
+			   file.name, file.recfmt, buffIndex, file.inboundIndex, file.inboundIndex, file.size, file.size );
 	}
-	file.count += ii;
 	if ( (vflag & VERB_FILE_RDLVL) )
 	{
 		if ( file.reclen )
-			printf( "process_vbn(): '%s' Record straddled block. reclen=%d, recsize=%d\n",
-					file.name, file.reclen, file.recsize );
-		printf( "process_vbn(): '%s' file_count now %d, filesize: %d, padding: %d\n",
-				file.name, file.count, file.size, file.rec_padding );
+			printf( "process_vbn(): '%s' Record straddled block. reclen=%d, recsize=%d, file_state=%d\n",
+					file.name, file.reclen, file.recsize, file.file_state );
+		printf( "process_vbn(): '%s' inboundIndex now %d(0x%X), filesize: %d(0x%X), padding: %d\n",
+				file.name, file.inboundIndex, file.inboundIndex, file.size, file.size, file.rec_padding );
 	}
-	if ( file.count >= file.size )
+	if ( file.inboundIndex >= file.size )
 	{
 		if ( (vflag & VERB_FILE_RDLVL) )
-			printf( "process_vbn(): '%s' Reached end of file. Skipping to next file.\n", file.name );
+		{
+			printf( "process_vbn(): '%s' Reached end of file. file.inboundIndex=%d(0x%X), file.size=%d(0x%X), file_state=%d. Skipping to next file.\n",
+					file.name, file.inboundIndex, file.inboundIndex, file.size, file.size, file.file_state );
+		}
 		skipping |= SKIP_TO_FILE;
 	}
 }
@@ -2455,7 +2691,12 @@ void usage ( const char *progname, int full )
 				 "    -d  Maintain VMS directory structure during extraction.\n"
 				 "    -e  Extract all files regardless of filetype (except .dir and .mai).\n"
 				 "    -E  Extract all files regardless of filetype (including .dir and .mai).\n"
-				 "    -f tapefile 'tapefile' is name of input. (default: " DEF_TAPEFILE ")\n" );
+				 "    -f tapefile 'tapefile' is name of input. (default: " DEF_TAPEFILE ")\n"
+				 "    -F n Handle VFC records according to 'n' as:\n"
+				 "           0 - Discard the VFC bytes and output records with just a newline at the end of line. (Default).\n"
+				 "           1 - Decode the two VFC bytes into appropriate Fortran carriage control.\n"
+				 "           2 - Insert the two VFC bytes at the head of each record unchanged.\n"
+				  );
 		printf(   "    -h or -? This message.\n"
 				  "    -i Input is of type DVD disk image of tape.\n"
 				  "    -I Input is of type SIMH format disk image of tape.\n"
@@ -2515,8 +2756,8 @@ int main ( int argc, char *argv[] )
 	}
 	gargv = argv;
 	gargc = argc;
-	cflag = dflag = eflag = Eflag = sflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = 0;
-	while ( ( c = getopt ( argc, argv, "cdeE:f:hiIln:Rs:S:tv:wx" ) ) != EOF )
+	cflag = dflag = eflag = Eflag = sflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = vfcflag = 0;
+	while ( ( c = getopt ( argc, argv, "cdeE:F:f:hiIln:Rs:S:tv:wx" ) ) != EOF )
 	{
 		switch ( c )
 		{
@@ -2534,6 +2775,15 @@ int main ( int argc, char *argv[] )
 			break;
 		case 'f':
 			tapefile = optarg;
+			break;
+		case 'F':
+			endp = NULL;
+			vfcflag = strtoul(optarg,&endp,0);
+			if ( !endp || *endp || vfcflag < 0 || vfcflag > 2)
+			{
+				printf("Snark: Bad -F parameter: '%s'. Must be a number 0 <= F <= 2\n", optarg);
+				return 1;
+			}
 			break;
 		default:
 			printf( "Unrecognised option: '%c'.\n", c );
