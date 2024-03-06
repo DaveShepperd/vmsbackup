@@ -123,6 +123,16 @@
  *  	Added support for optional VFC decode in output.
  *  	Changed the way it handles record delimiters.
  *
+ *  Version 3.8 - Feburary 2024 (DMS)
+ *  	Added support for fixed length input records.
+ *  	Added support for getopt_long().
+ *  	Added a --record option.
+ *  	Added rfm/size/att to directory listing.
+ *  	Write binary output and filename if record errors
+ *  	detected.
+ *  	Updated help message.
+ *  	See README.md for further details.
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -151,8 +161,14 @@
 	#include	<local/rmt.h>
 #endif
 #include	<sys/stat.h>
+#if HAVE_MTIO
 #include	<sys/mtio.h>
+#endif
 #include	<sys/file.h>
+
+#ifndef n_elts
+#define n_elts(x) (int)(sizeof(x)/sizeof((x)[0]))
+#endif
 
 extern int match ( const char *string, const char *pattern );
 static int typecmp ( const char *str, int which );
@@ -184,6 +200,7 @@ static inline unsigned int getu16 ( unsigned char *addr )
 #define GETU32(x) getu32( (unsigned char *)&(x) )
 
 #define MAX_FILENAME_LEN (128)
+#define MAX_FORMAT_LEN	 (16)
 
 struct bbh
 {
@@ -257,6 +274,7 @@ struct file_details
 	time_t atime;
 	time_t btime;
 	FILE *extf;
+	FILE *altf;
 	int directory;
 	unsigned int size;
 	int nblk;
@@ -265,28 +283,34 @@ struct file_details
 	int usr;
 	int grp;
 	int recfmt;
+	int savRecFmt;
 	int recatt;
 	unsigned int inboundIndex;		/* Index into specific byte in input file */
 	unsigned int outboundIndex;		/* Index into specific byte in output file */
+	unsigned int altboundIndex;
 	int rec_count;
 	int rec_padding;
-	int vfcsize;
-	char name[MAX_FILENAME_LEN+4];
-	char ufname[MAX_FILENAME_LEN+4];
-	unsigned short reclen;
+	int vfcsize;					/* number of VFC bytes */
+	char name[MAX_FILENAME_LEN+4];	/* Name from tape image */
+	char ufname[MAX_FILENAME_LEN+MAX_FORMAT_LEN+4]; /* Name converted to Unix */
+	char altUfName[MAX_FILENAME_LEN+MAX_FORMAT_LEN+4]; /* Name converted to Unix */
+	char *versionPtr;
+	unsigned short reclen;			/* length of most recent record read */
 	short fix;
-	unsigned short recsize;
+	unsigned short recsize;			/* record length in FIXED and max record length in VAR and VFC formats */
 	int do_vfc;
 	unsigned char vfc0, vfc1;
 	int do_rat;
 	int do_binary;
+	int errorIndex;
+	int file_record_error;
+	int file_blk_error;
+	int file_size_error;
+	int file_format_error;
 	FileState_t file_state;
 } file;
 
-#ifndef DEF_TAPEFILE
-	#define DEF_TAPEFILE "/dev/tape"
-#endif
-char *tapefile = DEF_TAPEFILE;
+char *tapefile;
 
 time_t secs_adj;
 
@@ -357,8 +381,8 @@ time_t secs_adj;
 #define SUMM_BUFFCOUNT	(15)	/* /BUFFER */
 
 int fd;				/* tape file descriptor */
-int cflag, dflag, eflag, Eflag, iflag, Iflag, lcflag, nflag, sflag, skipFlag, tflag, vflag, wflag, xflag, Rflag, vfcflag;
-int setnr, selset, skipSet, numHdrs, ss_errors, file_errors, total_errors;
+int cDelim, dflag, eflag, iflag, Iflag, lcflag, nflag, binaryFlag, tflag, vflag, wflag, xflag, Rflag, vfcflag;
+int setnr, selset, skipSet, numHdrs, saveSet_errors, total_errors;
 char selsetname[14];
 
 int skipping;			/*!< Bit mask of errors as described below */
@@ -381,7 +405,6 @@ int goptind, gargc;
 char label[32768 + LABEL_SIZE];
 
 static int blocksize;
-struct mtop op;
 
 /*
  * Someday, one might want to make MAX_BUFFCOUNT dynamic and get the actual
@@ -742,6 +765,61 @@ static void remove_dups( void )
 	}
 }
 
+static int getRfmRatt(struct file_details *file, char *rcdFormat, int dstLen, char delim)
+{
+	int ii,rLen;
+	static struct
+	{
+		int type;
+		const char *name;
+	} RcdFmts[] = {
+		{ FAB_dol_C_RAW, "RAW" },
+		{ FAB_dol_C_FIX, "FIX" },
+		{ FAB_dol_C_VAR, "VAR" },
+		{ FAB_dol_C_VFC, "VFC" },
+		{ FAB_dol_C_STM, "STM" },
+		{ FAB_dol_C_STMLF, "STMLF" },
+		{ FAB_dol_C_STMCR, "STMCR" },
+		{ FAB_dol_C_FIX11, "FIX" }
+	};
+	static struct 
+	{
+		int mask;
+		const char *name;
+	} RcdAtts[] = {
+		{ 1<<FAB_dol_V_FTN, "FTN" },
+		{ 1<<FAB_dol_V_CR, "CR" },
+		{ 1<<FAB_dol_V_PRN, "PRN" },
+		{ 1<<FAB_dol_V_BLK, "BLK" }
+	};
+	rLen = 0;
+	for (ii=0; ii < n_elts(RcdFmts);++ii)
+	{
+		if ( file->savRecFmt == RcdFmts[ii].type )
+		{
+			if ( file->savRecFmt == FAB_dol_C_VFC )
+				rLen += snprintf(rcdFormat + rLen, dstLen - rLen, "%c%s%d%c%d", delim, RcdFmts[ii].name, file->vfcsize, delim, file->recsize);
+			else
+				rLen += snprintf(rcdFormat + rLen, dstLen - rLen, "%c%s%c%d", delim, RcdFmts[ii].name, delim, file->recsize);
+			break;
+		}
+	}
+	if ( ii >= n_elts(RcdFmts) )
+		rLen += snprintf(rcdFormat + rLen, dstLen - rLen, "%cUNDEF%c%d", delim, delim, file->recsize);
+	if ( (file->recatt&((1<<n_elts(RcdAtts))-1)) )
+	{
+		for ( ii = 0; ii < n_elts(RcdAtts); ++ii )
+		{
+			if ( (file->recatt&RcdAtts[ii].mask) )
+				rLen += snprintf(rcdFormat + rLen, dstLen - rLen, "%c%s", delim, RcdAtts[ii].name);
+		}
+	}
+	else
+		rLen += snprintf(rcdFormat + rLen, dstLen - rLen, "%cNONE", delim);
+	rcdFormat[rLen] = 0;
+	return rLen;
+}
+
 /**
  * Open a unix file.
  *
@@ -762,11 +840,15 @@ static void remove_dups( void )
 static char lastFileName[256];
 static int lastVersionNumber;
 
-static FILE *openfile ( char *ufn, char *fn, int dirfile )
+static FILE *openfile ( struct file_details *file )
 {
 	char ans[80];
 	char *p, *q, s, *ext = NULL; /*, *justFileName; */
 	int procf;
+	char *ufn = file->ufname;
+	char *fn = file->name;
+	int dirfile = file->directory;
+	char rfm[MAX_FORMAT_LEN+4];
 
 	procf = 1;
 	/* copy whole fn to ufn and convert to lower case */
@@ -802,12 +884,21 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		}
 		++q;
 	}
-	++q;	/* ufn points to path and q points to start of filename. */
+	++q;	/* both ufn and p point to path and q points to start of filename in the ufn string. */
+	/* Make a copy of the directory */
 /*	justFileName = q; */
 	if ( !dflag )
 	{
-		strcpy( ufn, q );	/* not keeping the directory structure */
-		p = ufn;
+		strcpy( ufn, q );	/* not keeping the directory structure so toss the path */
+		file->altUfName[0] = '.'; /* alternate file starts with a '.' */
+		strncpy(file->altUfName+1, q, sizeof(file->altUfName)-2);
+	}
+	else
+	{
+		int sLen = q-ufn;	/* Get length of path */
+		memcpy(file->altUfName, ufn, sLen); /* duplicate the path */
+		file->altUfName[sLen] = '.'; /* start alternate filename with a '.' */
+		strncpy(file->altUfName + sLen + 1, q, sizeof(file->altUfName)-sLen-2); /* copy rest of filename */
 	}
 	/* strip off the version number and possibly fix the filename's case */
 	while ( *q && *q != ';' )
@@ -816,35 +907,68 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 			ext = q;
 		q++;
 	}
-	if ( Rflag && *q == ';' )
+	file->do_binary = 0;
+	file->do_rat = 0;
+	if ( !binaryFlag )
 	{
-		char *endp = NULL;
-		int curVersion;
-		curVersion = strtol(q+1,&endp,10);
-		if ( !endp || *endp )
-			curVersion = 0;
-		*q = 0;
-		if ( curVersion && !strcmp(lastFileName,ufn) )
+		file->do_rat = (file->recatt & ((1 << FAB_dol_V_FTN) | (1 << FAB_dol_V_CR) | (1 << FAB_dol_V_PRN)));
+		if ( (file->recfmt & 0x1F) == FAB_dol_C_VAR && !file->do_rat )
 		{
-			if ( curVersion < lastVersionNumber )
+			printf( "Snark: process_file(): File %s is set to variable but without any record attibutes. Setting it to binary\n", file->ufname );
+			file->savRecFmt = file->recfmt;
+			file->recfmt = FAB_dol_C_RAW;
+			file->do_binary = 1;
+		}
+	}
+	else
+	{
+		file->recfmt = FAB_dol_C_RAW;
+		file->do_binary = 1;
+	}
+	if ( *q == ';' )
+	{
+		file->versionPtr = q;
+		if ( Rflag )
+		{
+			char *endp = NULL;
+			int curVersion;
+			curVersion = strtol(q+1,&endp,10);
+			if ( !endp || *endp )
+				curVersion = 0;
+			*q = 0;
+			if ( curVersion && !strcmp(lastFileName,ufn) )
 			{
-				printf( "Skipping extraction of \"%s;%d\" because it's an older version of %s;%d.\n", p, curVersion, lastFileName, lastVersionNumber );
-				procf = 0;
+				if ( curVersion < lastVersionNumber )
+				{
+					printf( "Skipping extraction of \"%s;%d\" because it's an older version of %s;%d.\n", p, curVersion, lastFileName, lastVersionNumber );
+					procf = 0;
+				}
+				else
+					lastVersionNumber = curVersion;
 			}
 			else
+			{
+				strncpy(lastFileName,ufn,sizeof(lastFileName));
 				lastVersionNumber = curVersion;
+			}
+			*q = ';';
 		}
-		else
-		{
-			strncpy(lastFileName,ufn,sizeof(lastFileName));
-			lastVersionNumber = curVersion;
-		}
-		*q = ';';
 	}
 	if ( Rflag )
 		*q = '\0';
-	else if ( cflag )
-		*q = ':';
+	else if ( cDelim )
+		*q = cDelim;
+	getRfmRatt(file,rfm,sizeof(rfm),cDelim);
+	if ( file->do_binary )
+	{
+		strncat(ufn, rfm, sizeof(file->ufname)-1);
+		file->savRecFmt = file->recfmt;
+		file->recfmt = FAB_dol_C_RAW;
+		file->do_binary = 1;
+		file->altUfName[0] = 0;
+	}
+	else
+		strncat(file->altUfName, rfm, sizeof(file->altUfName)-1);
 	if ( procf )
 	{
 		if ( dirfile )
@@ -857,7 +981,7 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 		}
 		else
 		{
-			if ( ext && !Eflag && procf )
+			if ( ext && procf )
 			{
 				procf = typecmp(++ext, eflag);
 			}
@@ -872,8 +996,26 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 			procf = 0;
 	}
 	if ( procf )
-		/* open the file for writing */
-		return( fopen ( p, "w" ) );
+	{
+		FILE *fp;
+		fp = fopen(p,"w");
+		if ( !fp )
+		{
+			printf("Snark: Failed to open '%s' for output: %s\n", file->ufname, strerror(errno));
+		}
+		else if ( !binaryFlag && file->altUfName[0])
+		{
+			file->altf = fopen(file->altUfName,"w");
+			if ( !file->altf )
+			{
+				fclose(fp);
+				unlink(file->ufname);
+				printf("Snark: Failed to open '%s' for output: %s\n", file->altUfName, strerror(errno));
+				fp = NULL;
+			}
+		}
+		return fp;
+	}
 	else
 		return( NULL );
 }
@@ -897,39 +1039,58 @@ static FILE *openfile ( char *ufn, char *fn, int dirfile )
 
 int typecmp ( const char *str, int which )
 {
-	static const char * const Types1[] = {
-		"dir",			/* directory file */
-#if 0
+	static const char * const Types0[] = {
 		"exe",			/* executable image */
 		"lib",			/* object library */
 		"obj",			/* object file */
-#endif
+		NULL
+	};
+	static const char * const Types1[] = {
 		"odl",			/* rsx overlay description file */
 		"olb",			/* rsx object library */
-		"mai",			/* mail file */
 		"pmd",			/* rsx post mortem dump */
 		"sys",			/* rsx bootable system image */
 		"tlb",			/* ? */
 		"tlo",			/* ? */
 		"tsk",			/* rsx executable image */
-		"upd",
+		"upd",			/* ? */
 		NULL			/* null string terminates list */
 	};
 	static const char * const Types2[] = {
-		"mai",
-		"dir",
+		"dir",			/* directory file */
+		"mai",			/* mail file */
 		NULL
 	};
-
-	if ( which == 0 || which == 1 )
+	int ii, jj;
+	const char * const *list[4];
+	const char * const *type;
+	
+	list[0] = Types2;
+	if ( !which )
 	{
-		int ii;
-		const char * const *type = which ? Types2 : Types1;
+		list[1] = Types1;
+		list[2] = Types0;
+		jj = 3;
+	}
+	else if ( which == 1 )
+	{
+		list[1] = Types1;
+		jj = 2;
+	}
+	else 
+	{
+		jj = 1;
+	}
+	list[jj] = NULL;
+	for (jj=0; (type=list[jj]); ++jj)
+	{
 		for (ii=0; *type; ++ii, ++type )
+		{
 			if ( strncasecmp ( str, *type, 3 ) == 0 )
 				return( 0 );   /* found a match, file to be ignored */
+		}
 	}
-	return( 1 );	   /* no match found */
+	return 1;	   /* no match found keep file */
 }
 
 /**
@@ -948,13 +1109,13 @@ static void close_file( void )
 
 	skipping &= ~SKIP_TO_FILE;
 /*    rfmt = file.recfmt&0x1f; */
-	if ( !file.directory && !(file.recfmt&FAB_dol_M_MAIL) )
+	if ( !file.directory && !(file.savRecFmt&FAB_dol_M_MAIL) )
 	{
 		if ( (xflag || file.inboundIndex) && file.inboundIndex != file.size )
 		{
 			printf( "Snark: '%s' file size is not correct. Is %d, should be %d. May be corrupt.\n",
 					file.name, file.inboundIndex, file.size );
-			++file_errors;
+			++file.file_size_error;
 		}
 		if ( (vflag & VERB_FILE_RDLVL) )
 		{
@@ -970,37 +1131,78 @@ static void close_file( void )
 					);
 		}
 	}
-	if ( file.extf != NULL )	/* if file previously opened */
+	if ( file.extf != NULL )    /* if file previously opened */
 	{
 		struct utimbuf ut;
 
 		fclose ( file.extf );	/* close it */
+		file.extf = NULL;
 		ut.actime = file.atime;
 		ut.modtime = file.mtime;
 		utime( file.ufname, &ut );
-		
-		if ( file.do_binary || file_errors )
+		if ( file.altf )
 		{
-			char refilename[MAX_FILENAME_LEN+32+16];
-			strcpy( refilename, file.ufname );
-			if ( file.do_binary )
+			fclose(file.altf);
+			file.altf = NULL;
+			utime(file.altUfName, &ut);
+		}
+		if ( (!binaryFlag && file.do_binary) || file.file_record_error || file.file_size_error || file.file_blk_error || file.file_format_error )
+		{
+			char rfm[MAX_FORMAT_LEN];
+			char refilename[MAX_FILENAME_LEN+MAX_FORMAT_LEN+32];
+			int rLen, rName=0;
+
+			strncpy(refilename, file.ufname, sizeof(refilename)-1);
+			if ( file.altUfName[0] )
 			{
-				strcat( refilename, ".binary" );
-				rename( file.ufname, refilename );
-				printf( "Snark: close_file(): Forced binary mode. Renamed '%s' to '%s'\n",
-						 file.ufname ,refilename );
+				getRfmRatt(&file, rfm, sizeof(rfm),cDelim);
+				strncat(refilename, rfm, sizeof(refilename)-1);
 			}
-			if ( file_errors )
+			rLen = strlen(refilename);
+			if ( file.file_record_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cmay_be_corrupt_at_%d", cDelim, file.errorIndex);
+			else if ( file.file_size_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cwrong_size", cDelim);
+			else if ( file.file_blk_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cfailed_blk_decode", cDelim);
+			else if ( file.file_format_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cundefined_format", cDelim);
+			if ( strcmp(file.ufname, refilename) )
+				rName = 1;
+			if ( file.altUfName[0] )
 			{
-				strcat( refilename, ".may_be_corrupt" );
-				rename( file.ufname, refilename );
-				printf( "Snark: close_file(): Found file errors during copy. Renamed '%s' to '%s'\n",
-						 file.ufname ,refilename );
+				/* We wrote a binary file with the altUfName */
+				unlink(file.ufname);	/* toss the molested file */
+				rename(file.altUfName, refilename);	/* and make the binary file the one we want */
 			}
+			else
+			{
+				/* The ordinary output is okay, so toss the binary version */
+				unlink(file.altUfName);
+				/* if a rename is required, do it. */
+				if ( rName )
+					rename(file.ufname, refilename);
+			}
+			if ( rName )
+			{
+				if ( file.file_record_error || file.file_blk_error || file.file_size_error )
+					printf( "Snark: close_file(): Found file errors during copy. Renamed '%s' to '%s'\n",
+							 file.ufname ,refilename );
+				else
+					printf( "Snark: close_file(): Forced binary mode. Renamed '%s' to '%s'\n",
+						   file.ufname, refilename);
+			}
+			else
+				printf( "Snark: close_file(): Forced binary mode. File renamed to '%s'\n",
+					   file.ufname);
+		}
+		else
+		{
+			if ( file.altUfName[0] )
+				unlink(file.altUfName);
 		}
 	}
 	memset( &file, 0, sizeof( file ) );
-	file_errors = 0;
 }
 
 /**
@@ -1096,7 +1298,7 @@ void process_file ( unsigned char *buffer, int rsize )
 	{
 		printf ( "Snark: invalid file record header. Expected 01 01, found %02X %02X\n", buffer[0], buffer[1] );
 		skipping |= SKIP_TO_FILE;	/* Skip to next file block */
-		++ss_errors;
+		++saveSet_errors;
 		return;
 	}
 
@@ -1114,7 +1316,7 @@ void process_file ( unsigned char *buffer, int rsize )
 		if ( dsize < 0 || dsize+cc+4 > rsize )
 		{
 			printf( "Snark: process_file() subfield %d, type %d, found bad count of %d.\n", subf, dtype, dsize );
-			++ss_errors;
+			++saveSet_errors;
 			skipping |= SKIP_TO_FILE;	/* skip to next file block */
 			return;
 		}
@@ -1153,6 +1355,7 @@ void process_file ( unsigned char *buffer, int rsize )
 			break;
 		case FREC_FORMAT:
 			file.recfmt = data[0];
+			file.savRecFmt = file.recfmt;
 			file.recatt = data[1];
 			file.recsize = getu16( data+2 );
 			/* bytes 4-7 unaccounted for.  */
@@ -1274,7 +1477,7 @@ void process_file ( unsigned char *buffer, int rsize )
 		default:
 			printf( "Snark: process_file(): subfield %d, undefined record type: %d size %d\n",
 					subf, dtype, dsize );
-			++ss_errors;
+			++saveSet_errors;
 			break;
 		}
 		++subf;
@@ -1283,7 +1486,10 @@ void process_file ( unsigned char *buffer, int rsize )
 
 	/* open the file */
 	if ( strstr(file.name,".MAI") )
+	{
 		file.recfmt |= FAB_dol_M_MAIL;
+		file.savRecFmt = file.recfmt;
+	}
 	procf = 0;
 	if ( goptind < gargc )
 	{
@@ -1297,14 +1503,18 @@ void process_file ( unsigned char *buffer, int rsize )
 	if ( procf )
 	{
 		if ( tflag )
-			printf ( " %-35s %8d%s\n", file.name, file.size, file.size < 0 ? " (IGNORED!!!)" : "" );
+		{
+			char rfm[MAX_FORMAT_LEN];
+			getRfmRatt(&file,rfm,sizeof(rfm), ':');
+			printf ( " %-35s %8d (%s)%s\n", file.name, file.size, rfm, file.size < 0 ? " (IGNORED!!!)" : "" );
+		}
 		if ( file.size < 0 )
 		{
 			if ( !tflag && xflag )
 				printf ( "Snark: process_file(): %-35s not extracted due to filesize of %8d\n",
 						 file.name, file.size );
-			++file_errors;
-			++ss_errors;
+			++file.file_size_error;
+			++saveSet_errors;
 			skipping |= SKIP_TO_FILE;	/* this is bad */
 			return;
 		}
@@ -1320,18 +1530,10 @@ void process_file ( unsigned char *buffer, int rsize )
 			return;
 		}
 
-		file.do_rat = (file.recatt&((1<<FAB_dol_V_FTN)|(1<<FAB_dol_V_CR)|(1<<FAB_dol_V_PRN)));
-		file.do_binary = 0;
-		if ( (file.recfmt & 0x1F) == FAB_dol_C_VAR && !file.do_rat )
-		{
-			printf( "Snark: process_file(): File %s is set to variable but without any record attibutes. Setting it to binary\n", file.ufname );
-			file.recfmt = FAB_dol_C_RAW;
-			file.do_binary = 1;
-		}
 		if ( xflag )
 		{
 			/* open file */
-			file.extf = openfile ( file.ufname, file.name, file.directory );
+			file.extf = openfile ( &file );
 			if ( file.extf != NULL && vflag )
 				printf ( "extracting %s\n", file.name );
 		}
@@ -1358,7 +1560,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 	{
 		printf ( "Snark: invalid summary record header. Expected 01 01, found %02X %02X\n",
 				 buffer[0], buffer[1] );
-		++ss_errors;
+		++saveSet_errors;
 		skipping |= SKIP_TO_BLOCK;	/* Skip to next block */
 		return;
 	}
@@ -1582,11 +1784,11 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 	{
 		switch ( (file.recfmt&0x1F) )
 		{
+		case FAB_dol_C_FIX:
+		case FAB_dol_C_FIX11:
 		case FAB_dol_C_STM:
 		case FAB_dol_C_STMLF:
 		case FAB_dol_C_STMCR:
-		case FAB_dol_C_FIX:
-		case FAB_dol_C_FIX11:
 		case FAB_dol_C_RAW:
 			file.reclen = rsize;		/* assume max */
 			if ( file.inboundIndex + file.reclen > file.size )
@@ -1621,6 +1823,42 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					return;
 				}
 				file.outboundIndex += file.reclen;
+/* Not sure whether this is a good thing or not. Some FIXed files have a CR attribute which won't be right for example, .EXE, etc. */
+/* So for, now, just don't do it. */
+#if 0
+				if ( (file.recatt & (1<<FAB_dol_V_CR)) && ((file.recfmt&0x1F) == FAB_dol_C_FIX || (file.recfmt&0x1F) == FAB_dol_C_FIX11) )
+				{
+					if ( fwrite("\n", 1, 1, file.extf) != 1 )
+					{
+	#if HAVE_STRERROR
+						printf("snark: Failed to write (fixed length) %d bytes to '%s': %s\n", file.reclen, file.name, strerror(errno));
+	#else
+						perror("snark: Failed to write record");
+	#endif
+						file.inboundIndex = file.size;
+						skipping |= SKIP_TO_FILE;
+						file.file_state = GET_IDLE;
+						return;
+					}
+					++file.outboundIndex;
+				}
+#endif
+				if ( file.altf )
+				{
+					if ( fwrite(buffer + buffIndex, 1, file.reclen, file.altf) != file.reclen )
+					{
+	#if HAVE_STRERROR
+						printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+	#else
+						perror("snark: Failed to write record");
+	#endif
+						file.inboundIndex = file.size;
+						skipping |= SKIP_TO_FILE;
+						file.file_state = GET_IDLE;
+						return;
+					}
+					file.altboundIndex += file.reclen;
+				}
 			}
 			buffIndex += file.reclen;
 			file.inboundIndex += file.reclen;
@@ -1640,6 +1878,21 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 				file.file_state = GET_RCD_COUNT;
 //				Fall through to GET_RCD_COUNT
 			case GET_RCD_COUNT:
+				if ( file.altf )
+				{
+					if ( fwrite(buffer+buffIndex, 1, 2, file.altf) != 2 )
+					{
+	#if HAVE_STRERROR
+						printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+	#else
+						perror("snark: Failed to write record");
+	#endif
+						file.inboundIndex = file.size;
+						skipping |= SKIP_TO_FILE;
+						file.file_state = GET_IDLE;
+						return;
+					}
+				}
 				file.reclen = getu16( (unsigned char *)buffer + buffIndex );
 				buffIndex += 2;
 				file.inboundIndex += 2;		/* This has to match all bytes found in file */
@@ -1700,7 +1953,12 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 							file.reclen, file.reclen, isprint(file.reclen&0xFF) ? (file.reclen&0xFF) : '.', isprint((file.reclen>>8)&0xFF) ? (file.reclen>>8)&0xFF : '.',
 							file.recsize, file.recfmt, FAB_dol_C_RAW );
 					file.recfmt = FAB_dol_C_RAW;
-					buffIndex -= 2;					/* backup over the record length */
+					if ( !file.file_record_error )
+					{
+						file.errorIndex = file.inboundIndex-2;
+						++file.file_record_error;
+					}
+/*					buffIndex -= 2;  */               /* backup over the record length */
 					continue;
 				}
 				if ( file.inboundIndex < file.size )
@@ -1738,7 +1996,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					preCode = NULL;
 					preNum = 0;
 					/* vfc0 spec. Char has:
-					 *  0  - (as in nul) no carriage control
+					 *  0  - (as in nul) no leading carriage control
 					 * ' ' - (space) Normal: \n followed by text followed by \r
 					 * '$' - Prompt: \n followed by text, no \r at end of line
 					 * '+' - Overstrike: text followed by \r
@@ -1826,6 +2084,22 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 						printf( "Writing %4d byte%s. recfmt=%d, recatt=0x%02X, reclen=%d(0x%X)\n",
 								tlen, tlen == 1 ? "":"s", file.recfmt, file.recatt, file.reclen, file.reclen );
 					}
+					if ( file.altf )
+					{
+						if ( fwrite(buffer+buffIndex, 1, tlen, file.altf ) != tlen )
+						{
+		#if HAVE_STRERROR
+							printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+		#else
+							perror("snark: Failed to write record");
+		#endif
+							file.inboundIndex = file.size;
+							skipping |= SKIP_TO_FILE;
+							file.file_state = GET_IDLE;
+							return;
+						}
+						file.altboundIndex += tlen;
+					}
 					if ( fwrite( buffer+buffIndex, 1, tlen, file.extf ) != tlen) /* write as much as we can at once */
 					{
 #if HAVE_STRERROR
@@ -1854,13 +2128,15 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					{
 						/* vfc1 spec. Bits:
 						 * 7 6 5 4 3 2 1 0
-						 * 0 0 0 0 0 0 0 0 - no trailing character
-						 * 0 x x x x x x x - bits 6-0 indicate how many nl's to output followed by a cr
-						 * 1 0 0 x x x x x - bits 4-0 describe the end-of-record char (normally a 0x0D
-						 * 1 0 1 x x x x x - all other conditions = just one cr
-						 * 1 1 0 0 x x x x - bits 3-0 describe bits to send to VFU. If no VFU, just one cr 
-						 * 1 1 0 1 x x x x - all other conditions = just one cr
-						 * 1 1 1 x x x x x - all other conditions = just one cr
+						 * 0 0 0 0 0 0 0 0 - no trailing carriage control
+						 * 0 x x x x x x x - bits 6-0 indicate how many nl's to output followed by a cr (\r)
+						 * 1 0 0 x x x x x - bits 4-0 describe the end-of-record char (normally a 0x0D: \r)
+						 * 1 0 1 * * * * * - all other conditions = just one \r
+						 * 1 1 0 0 x x x x - bits 3-0 describe bits to send to VFU. If no VFU, just one \r 
+						 * 1 1 0 1 * * * * - all other conditions = just one \r
+						 * 1 1 1 * * * * * - all other conditions = just one \r
+						 *
+						 * where 'x' can be 0 or 1 and means something and '*' means not used.
 						 */
 						if ( file.vfc1 )
 						{
@@ -1927,6 +2203,24 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 						++buffIndex;			/* round it up (all records are padded to even length) */
 						++file.rec_padding;		/* this doesn't get charged against file size */
 						++file.inboundIndex;	/* keep track of every byte found in input file */
+						if ( file.altf )
+						{
+							char chr[1];
+							chr[0] = 0;
+							if ( fwrite(chr, 1, 1, file.altf ) != 1 )
+							{
+			#if HAVE_STRERROR
+								printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+			#else
+								perror("snark: Failed to write record");
+			#endif
+								file.inboundIndex = file.size;
+								skipping |= SKIP_TO_FILE;
+								file.file_state = GET_IDLE;
+								return;
+							}
+							file.altboundIndex += 1;
+						}
 					}
 					file.file_state = GET_RCD_COUNT;	/* expect record count next */
 				}
@@ -1934,8 +2228,8 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 			break;
 
 		default:
-			++ss_errors;
-			++file_errors;
+			++saveSet_errors;
+			++file.file_format_error;
 			skipping |= SKIP_TO_FILE;
 			printf ( "Snark: '%s' process_vbn(): Invalid record format = %d, file.inboundIndex=%d(0x%X), buffIndex=%d(0x%X), file.size=%d(0x%X)\n",
 					 file.name, file.recfmt, file.inboundIndex, file.inboundIndex, buffIndex, buffIndex, file.size, file.size );
@@ -2040,8 +2334,8 @@ void process_block ( unsigned char *blkptr )
 	if ( !numb )
 	{
 		skipping |= SKIP_TO_BLOCK;
-		++ss_errors;
-		++file_errors;
+		++saveSet_errors;
+		++file.file_blk_error;
 		return;
 	}
 	if ( numb != last_block_number+1 )
@@ -2098,8 +2392,8 @@ void process_block ( unsigned char *blkptr )
 			printf( "Snark: rsize of %d is wrong. Cannot be more than %ld\n",
 					rsize, bsize-ii );
 			skipping |= SKIP_TO_BLOCK;
-			++ss_errors;
-			++file_errors;
+			++saveSet_errors;
+			++file.file_record_error;
 			break;
 		}
 		switch ( rtype )
@@ -2146,11 +2440,11 @@ void process_block ( unsigned char *blkptr )
 
 		default:
 			printf ( "Snark: process_block(): %d is an invalid record type.\n", rtype );
-			++ss_errors;
+			++saveSet_errors;
 			if ( file.extf )
 			{
 				printf( "Snark: Skipping rest of %s\n", file.name );
-				++file_errors;
+				++file.file_record_error;
 			}
 			skipping |= SKIP_TO_BLOCK|SKIP_TO_FILE;
 			return;
@@ -2355,9 +2649,8 @@ int rdhead ( void )
 	char name[80];
 
 	skipping = 0;
-	total_errors += ss_errors;
-	ss_errors = 0;
-	file_errors = 0;
+	total_errors += saveSet_errors;
+	saveSet_errors = 0;
 	nfound = 1;
 	mstop = 3;				/* autostop when we get to 2 tm's */
 	last_block_number = 0;		/* start all blocks at 0 */
@@ -2427,6 +2720,7 @@ int rdhead ( void )
 					continue;
 				}
 			}
+#if 0
 			if ( sflag )
 			{
 				if ( setnr < selset )
@@ -2448,7 +2742,8 @@ int rdhead ( void )
 					break;
 				}
 			}
-			if ( skipFlag )
+#endif
+			if ( skipSet )
 			{
 				if ( numHdrs < skipSet )
 				{
@@ -2496,7 +2791,7 @@ int rdhead ( void )
 
 static void end_of_saveset( char *ssname )
 {
-	if ( vflag || tflag || ss_errors )
+	if ( vflag || tflag || saveSet_errors )
 	{
 		char name[80];
 		if ( ssname )
@@ -2508,9 +2803,9 @@ static void end_of_saveset( char *ssname )
 		{
 			strcpy( name, "Unknown" );
 		}
-		if ( ss_errors )
+		if ( saveSet_errors )
 			printf( "Snark: Found %d error%s in saveset \"%s\"\n",
-					ss_errors, ss_errors > 1 ? "s" : "", name );
+					saveSet_errors, saveSet_errors > 1 ? "s" : "", name );
 		if ( vflag || tflag )
 			printf ( "End of saveset: %s\n\n\n", name );
 	}
@@ -2661,6 +2956,48 @@ static int read_next_block( )
 	return NXT_BLK_OK;			/* we've got a good record */
 }
 
+typedef enum
+{
+	 OPT_UNDEFINED
+	,OPT_DVD			/* -i */
+	,OPT_EXTRACT		/* --extract */
+	,OPT_FILE			/* -f */
+	,OPT_HDR1_NUMBER	/* -s */
+	,OPT_HELP			/* -h */
+	,OPT_HIERARCHY		/* -d */
+	,OPT_LIST			/* -t */
+	,OPT_LOWERCASE		/* -l */
+	,OPT_NO_VERSION		/* -R */
+	,OPT_PROMPT			/* -w */
+	,OPT_SET_NAME		/* -n */
+	,OPT_SIMH			/* -I */
+	,OPT_VERBOSE		/* -v */
+	,OPT_VER_DELIMIT	/* -delimiter */
+	,OPT_VFC
+	,OPT_BINARY			/* write binary and preserve record formats */
+} Options_t;
+
+static struct option long_options[] = 
+{
+	 {"delimiter", optional_argument, NULL, OPT_VER_DELIMIT }
+	,{"dvd",no_argument,NULL,'i'}
+	,{"extract",optional_argument,NULL,OPT_EXTRACT}
+	,{"file", required_argument, NULL, 'f' }
+	,{"hierarchy", no_argument, NULL, 'd' }
+	,{"hdr1",required_argument,NULL,'s'}
+	,{"help", no_argument, NULL, 'h' }
+	,{"list",no_argument,NULL,'t'}
+	,{"lowercase", no_argument, NULL, 'l'}
+	,{"noversions", no_argument, NULL, 'R'}
+	,{"prompt",no_argument,NULL,'w'}
+	,{"binary",no_argument,NULL,OPT_BINARY }
+	,{"setname", required_argument, NULL, 'n'}
+	,{"simh",no_argument,NULL,'I'}
+	,{"verbose",required_argument,NULL,'v'}
+	,{"vfc", required_argument, NULL, 'F' }
+	,{NULL,0,NULL,0}
+};
+
 /**
  * Display program usage instructions.
  *
@@ -2674,40 +3011,69 @@ static int read_next_block( )
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.5, January 2024\n", progname );
-	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-S <num>][-f <file>][-v <num>]\n",
+	printf ("%s version 3.8, January 2024\n", progname );
+	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>\n",
 			 progname );
 	if ( full )
 	{
 		printf ( "Where {} indicates one option is required, [] indicates optional and <> indicates parameter:\n"
-				 "    -c  Convert VMS filename version delimiter ';' to ':'\n"
-				 "    -d  Maintain VMS directory structure during extraction.\n"
-				 "    -e  Extract all files regardless of filetype (except .dir and .mai).\n"
-				 "    -E  Extract all files regardless of filetype (including .dir and .mai).\n"
-				 "    -f tapefile 'tapefile' is name of input. (default: " DEF_TAPEFILE ")\n"
-				 "    -F n Handle VFC records according to 'n' as:\n"
-				 "           0 - Discard the VFC bytes and output records with just a newline at the end of line. (Default).\n"
-				 "           1 - Decode the two VFC bytes into appropriate Fortran carriage control.\n"
-				 "           2 - Insert the two VFC bytes at the head of each record unchanged.\n"
+				 " -c               Convert VMS filename version delimiter ';' to ':'\n"
+				 " --delimiter[=x]  Convert VMS filename version delimiter from ';' to whatever 'x' is (x must be printable, defaults 'x' to ':')\n"
+				 " -d, --hierarchy  Maintain VMS directory structure during extraction.\n"
+				 " -x               Extract files from saveset. See -e, -E or --extract below. (Same as --extract=0).\n"
+				 " -e               Extract all files regardless of filetype (except .dir and .mai).\n"
+				 " -E               Extract all files regardless of filetype (including .dir and .mai).\n"
+				 " --extract[=n]    Extract all files according to value of n:\n"
+				 "                     0  = All except .DIR,.EXE,.LIB,.MAI,.OBJ,.ODL,.OLB,.PMD,.SYS,.TLB,.TLO,.TSK,.UPD (default)\n"
+				 "                     1  = All except .DIR,.MAI,.ODL,.OLB,.PMD,.SYS,.TLB,.TLO,.TSK,.UPD\n"
+				 "                     2+ = All except .DIR,.MAI\n"
+				 " -f name          See --file below.\n"
+				 " --file=name      Name of image or device. Alternate to -f. Required parameter (no default)\n"
+				 " -F n             See --vfc below.\n"
+				 " --binary         Output records in binary while preserving record formats and attributes by including them in the filename.\n"
+				 "                      The output files will be named x.x[;version][;format;size;att]\n"
+				 "                      I.e. if the record format of file FOO.BAR;1 is FIXED with size 512 and no attributes its output will be\n"
+				 "                      named FOO.BAR;1;FIX;512;NONE where the ';' is the delimiter specified with --delimiter or ';' by default.\n"
+				 "                      If the format of file FOO.BAR;1 is VAR, then the size is that of the longest record.\n"
+				 "                      I.e. if the longest record is 77 bytes and the attributes is CR, the name will be FOO.BAR;1;VAR;77;CR\n"
+				 "                      The formats can be one of RAW, FIX, VAR, VFC, VFCn, STM, STMCR, STMLF where the 'n' in VFCn is the\n"
+				 "                      number of VFC bytes in the record. The attributes can be one or more of NONE, FTN, CR, PRN and BLK\n"
+				 " --vfc[=n]        (Alternate to -F) Handle VFC records according to 'n' as:\n"  
+				 "                      0 - Discard the VFC bytes and output records with just a newline at the end of line.\n"
+				 "                      1 - Decode the two VFC bytes into appropriate Fortran carriage control (Default).\n"
+				 "                      2 - Insert the two VFC bytes at the head of each record unchanged.\n"
 				  );
-		printf(   "    -h or -? This message.\n"
-				  "    -i Input is of type DVD disk image of tape.\n"
-				  "    -I Input is of type SIMH format disk image of tape.\n"
-				  "    -l Lowercase all directory and filenames.\n"
-				  "    -n setname 'setname' is the saveset name as provided in the HDR1 record.\n"
-				  "    -R Strip off file version number and output only latest version.\n"
-				  "    -s setnumber 'setnumber' is decimal saveset number as provided in a HDR1 record.\n"
-				  "    -S setnumber 'setnumber' is decimal as the count of HDR1 blocks starting at 1.\n"
-				  "    -t  List file contents to stdout.\n"
-				  "    -v  bitmask of items to enable verbose level:\n"
-				  "        0x01 - small announcements of progress.\n"
-				  "        0x02 - announcements about file read primitives.\n"
-				  "        0x04 - announcements about file write primitives.\n"
-				  "        0x08 - used to debug buffer queues.\n"
-				  "        0x10 - lots of other debugging info.\n"
-				  "        0x20 - block reads if -i or -I mode.\n"
-				  "    -w  Prompt before writing each output file.\n"
-				  "    -x  Extract files from saveset.\n" );
+		printf(  " -h, --help       This message.\n"
+				 " -i, --dvd        Input is of type DVD disk image of tape (aka Atari format).\n"
+				 " -I, --simh       Input is of type SIMH format disk image of tape.\n"
+				 " -l, --lowercase  Lowercase all directory and filenames.\n"
+				 " -R, --noversions Strip off file version number and output only latest version.\n"
+				 " -n name          See --setname below.\n"
+				 " --setname=name   Select the name of the saveset in the tape image as found in a HDR1 record.\n"
+				 " -s n             See --hdr1 below.\n"
+				 " --hdr1=n         'n' is a decimal number indicating which file delimited by HDR1 records to unpack. (Starts at 1).\n"
+				 "                      I.e. --hdr1number=3 means skip to the third HDR1 then unpack just that file.\n"
+				 " -t, --list       List file contents to stdout.\n"
+				 " -v n             See --verbose below.\n"
+				 " --verbose=n      'n' is a bitmask of items to enable verbose level:\n"
+				 "                      0x01 - small announcements of progress.\n"
+				 "                      0x02 - announcements about file read primitives.\n"
+				 "                      0x04 - announcements about file write primitives.\n"
+				 "                      0x08 - used to debug buffer queues.\n"
+				 "                      0x10 - lots of other debugging info.\n"
+				 "                      0x20 - block reads if -i or -I mode.\n"
+				 " -w, --prompt     Prompt before writing each output file.\n"
+				 );
+		printf( "\nNOTE: If files are found with VAR or VFC formats but no record attribute set, the filename will\n"
+				"be output as x.x[;version];format;size;NONE; where ';' is the delimiter set in --delimiter (; by\n"
+				"default) and ';format' will be one of ;VAR or ;VFC and ;size will be size of the longest record\n"
+				"found in the file.\n"
+				"\nNOTE 2: If an invalid length is discovered in a VAR or VFC record the file will be renamed\n"
+				"x.x[;version];format;size;att;may_be_corrupt_at_x where ;format will be one of ;VAR or ;VFC,\n"
+				";size will be the length of the longest record, ;att will hold the attribute (CR, FTN, PRN, BLK)\n"
+				"and _x is the byte offset in the file where the invalid record can be found. It is expected\n"
+				"a custom program to be used to attempt to extract the records from the file as a separate step.\n"
+				);
 	}
 }
 
@@ -2725,12 +3091,14 @@ void usage ( const char *progname, int full )
 int main ( int argc, char *argv[] )
 {
 	const char *progname;
-	int c, i, eoffl;
+	int c, eoffl;
 	extern int optind;
 	extern char *optarg;
 	char *endp;
 	struct tm tadj;
-
+	int option_index = 0;
+	struct stat fileStat;
+	
 	memset( &tadj, 0, sizeof(tadj) );
 	tadj.tm_sec = 0;
 	tadj.tm_min = 0;
@@ -2749,23 +3117,51 @@ int main ( int argc, char *argv[] )
 	}
 	gargv = argv;
 	gargc = argc;
-	cflag = dflag = eflag = Eflag = sflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = vfcflag = 0;
-	while ( ( c = getopt ( argc, argv, "cdeE:F:f:hiIln:Rs:S:tv:wx" ) ) != EOF )
+	dflag = eflag = tflag = vflag = wflag = xflag = iflag = Iflag = Rflag = 0;
+	vfcflag = 1;	/* Default VFC mode */
+	cDelim = ';';	/* Default version delimiter */
+	while ( ( c = getopt_long ( argc, argv, "cdeEF:f:hiIln:Rs:tv:wx", long_options, &option_index ) ) != EOF )
 	{
 		switch ( c )
 		{
-		case 'c':
-			++cflag;
+		case OPT_VER_DELIMIT:	/* -delimiter */
+			if ( !optarg )
+			{
+				printf("Defaulting version delimiter to ':'\n");
+				cDelim = ':';
+				break;
+			}
+			if ( !isprint(optarg[0]) )
+			{
+				printf("Argument to --delimiter must be printable. Is 0x%02X\n", optarg[0]);
+				return 1;
+			}
+			cDelim = optarg[0];
 			break;
+		case OPT_EXTRACT:		/* --extract */
+			endp = NULL;
+			eflag = strtoul(optarg,&endp,0);
+			if ( !endp || *endp || eflag < 0 || eflag > 2)
+			{
+				printf("Snark: Bad --extract parameter: '%s'. Must be a number 0 <= n <= 2\n", optarg);
+				return 1;
+			}
+			++xflag;
+			break;
+		case 'c':
+			cDelim = ':';
+			break;
+		case OPT_HIERARCHY:		/* -d */
 		case 'd':
 			++dflag;
 			break;
 		case 'e':
-			++eflag;
+			eflag = 1;
 			break;
 		case 'E':
-			++Eflag;
+			eflag = 2;
 			break;
+		case OPT_FILE:			/* -f */
 		case 'f':
 			tapefile = optarg;
 			break;
@@ -2778,41 +3174,54 @@ int main ( int argc, char *argv[] )
 				return 1;
 			}
 			break;
+		case OPT_HELP:			/* -h */
 		default:
 			printf( "Unrecognised option: '%c'.\n", c );
 		case 'h':
 		case '?':
 			usage ( progname, 1 );
 			return 0;
+		case OPT_DVD:			/* -i */
 		case 'i':
 			++iflag;
 			break;
+		case OPT_SIMH:			/* -I */
 		case 'I':
 			++Iflag;
 			break;
+		case OPT_BINARY:
+			++binaryFlag;
+			break;
+		case OPT_LOWERCASE:		/* -l */
 		case 'l':
 			++lcflag;
 			break;
+		case OPT_SET_NAME:		/* -n */
 		case 'n':
 			++nflag;
 			c = strlen(optarg);
 			memset(selsetname,' ',sizeof(selsetname));
 			memcpy(selsetname,optarg,c);
 			break;
+		case OPT_NO_VERSION:		/* -R */
 		case 'R':
 			++Rflag;
 			break;
+		case OPT_HDR1_NUMBER:	/* -s */
 		case 's':
-			++sflag;
-			sscanf ( optarg, "%d", &selset );
+			endp = NULL;
+			skipSet = strtol(optarg,&endp,0);
+			if ( !endp || *endp || skipSet <= 0 )
+			{
+				printf("Snark: Bad -s parameter. '%s' Must be integer greater than 1\n", optarg);
+				return 1;
+			}
 			break;
-		case 'S':
-			++skipFlag;
-			sscanf ( optarg, "%d", &skipSet );
-			break;
+		case OPT_LIST:			/* -t */
 		case 't':
 			++tflag;
 			break;
+		case OPT_VERBOSE:		/* -v */
 		case 'v':
 			endp = NULL;
 			vflag = strtoul(optarg,&endp,0);
@@ -2822,6 +3231,7 @@ int main ( int argc, char *argv[] )
 				return 1;
 			}
 			break;
+		case OPT_PROMPT:			/* -w */
 		case 'w':
 			++wflag;
 			break;
@@ -2830,13 +3240,18 @@ int main ( int argc, char *argv[] )
 			break;
 		}
 	}
+	if ( !tapefile )
+	{
+		printf("The -f (or --file) option is required.\n");
+		return 1;
+	}
 	if ( !tflag && !xflag )
 	{
 		printf( "You must provide either -x or -t.\n" );
 		usage ( progname, 1 );
 		exit ( 1 );
 	}
-	if ( sflag && nflag )
+	if ( skipSet && nflag )
 	{
 		printf( "-s and -n are mutually exclusive.\n" );
 		usage( progname, 1 );
@@ -2845,33 +3260,43 @@ int main ( int argc, char *argv[] )
 	goptind = optind;
 
 	/* open the tape file */
-	fd = open ( tapefile, O_RDONLY );
+	fd = stat( tapefile, &fileStat);
+	if ( fd < 0 )
+	{
+		perror("Failed to stat file");
+		return 1;
+	}
+	fd = open(tapefile, O_RDONLY);
 	if ( fd < 0 )
 	{
 		perror ( tapefile );
 		exit ( 1 );
 	}
 
-	if ( !iflag && !Iflag )
+#if HAVE_MTIO
+	if ( !S_ISREG(fileStat.st_mode) && !iflag && !Iflag )
 	{
 		/* rewind the tape */
+		int ii;
+		struct mtop op;
 		op.mt_op = MTSETBLK;
 		op.mt_count = 0;
-		i = ioctl( fd, MTIOCTOP, &op );
-		if ( i < 0 )
+		ii = ioctl( fd, MTIOCTOP, &op );
+		if ( ii < 0 )
 		{
 			perror( "Unable to set to variable blocksize." );
 			exit ( 1 );
 		}
 		op.mt_op = MTREW;
 		op.mt_count = 1;
-		i = ioctl ( fd, MTIOCTOP, &op );
-		if ( i < 0 )
+		ii = ioctl ( fd, MTIOCTOP, &op );
+		if ( ii < 0 )
 		{
 			perror ( "Unable to rewind tape." );
 			exit ( 1 );
 		}
 	}
+#endif
 
 	eoffl = 0;
 	/* read the backup tape blocks until end of tape */
@@ -2896,7 +3321,7 @@ int main ( int argc, char *argv[] )
 			/* FALL THROUGH TO NXT_BLK_NOLEAD */
 		case NXT_BLK_ERR:		/* Generic internal error */
 		case NXT_BLK_NOLEAD:	/* Failed to read leading block */
-			++ss_errors;
+			++saveSet_errors;
 			skipping |= SKIP_TO_SAVESET;
 			skip_to_tm();
 			freeall();		/* reset for next saveset */
@@ -2909,8 +3334,8 @@ int main ( int argc, char *argv[] )
 				{
 					printf( "Snark: block %ld out of sequence. Expected %ld\n",
 							bptr->blknum, last_block_number+1 );
-					++file_errors;
-					++ss_errors;
+					++file.file_blk_error;
+					++saveSet_errors;
 					close_file();
 					skipping |= SKIP_TO_FILE;	/* current file is probably corrupt */
 				}

@@ -21,9 +21,9 @@ static unsigned char inpBuf[65536];
 
 int main(int argc, char *argv[])
 {
-	int cc, sts, fd, ofd, found=0;
+	int cc, sts, fd= -1, ofd= -1, found=0;
 	int reclen, showHeaders=0;
-	const char *ssName=NULL, *outFname;
+	const char *ssName=NULL, *outFname=NULL;
 	char ascBuf[82];
 	             /*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
 	             /*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/

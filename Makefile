@@ -1,14 +1,21 @@
 #
 #
+# Set this to 1 if you want to include magtape device support
+HAVE_MTIO = 0
+
 CC= gcc
 DEFS  = -DHAVE_STRERROR
 #DEFS += -DSWAP
 #DEFS += -DREMOTE
 DEFS += -D_LARGEFILE64_SOURCE
 DEFS += -D_FILE_OFFSET_BITS=64
+ifeq ($(HAVE_MTIO),1)
+DEFS += -DHAVE_MTIO
+endif
+
 MACH= -m32
-OPT= #-O2
-DBG= -g #-DDEBUG
+OPT= -O2
+DBG= #-g #-DDEBUG
 WARNS= -Wall #-ansi -pedantic
 CFLAGS= $(DEFS) $(MACH) $(OPT) $(DBG) $(WARNS) 
 LFLAGS= $(MACH)

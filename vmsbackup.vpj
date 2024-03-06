@@ -279,6 +279,7 @@
 			<F
 				N="Makefile"
 				Type="Makefile"/>
+			<F N="README.md"/>
 		</Folder>
 	</Files>
 	<List Name="RTE">

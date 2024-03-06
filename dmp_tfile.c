@@ -20,7 +20,7 @@
 int main(int argc, char *argv[])
 {
 	int cc, sts, fd;
-	int reclen, volCount=0, hdrCount=1, showHeaders = 1, simh = 0, interCount, interLen=0;
+	int reclen, volCount=0, hdrCount=1, showHeaders = 1, simh = 0, interCount=0, interLen=0;
 
 	while ( (cc = getopt(argc, argv, "nI")) != EOF )
 	{
