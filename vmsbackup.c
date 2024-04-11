@@ -133,6 +133,9 @@
  *  	Updated help message.
  *  	See README.md for further details.
  *
+ *  Versin 3.9 - April 2024 (DMS)
+ *      Added support for building under MSYS2 on Windows
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -155,16 +158,22 @@
 #if HAVE_STRERROR
 #include	<errno.h>
 #endif
-#include	<sys/ioctl.h>
 #include	<sys/types.h>
 #ifdef REMOTE
 	#include	<local/rmt.h>
 #endif
 #include	<sys/stat.h>
 #if HAVE_MTIO
+#include	<sys/ioctl.h>
 #include	<sys/mtio.h>
 #endif
 #include	<sys/file.h>
+
+#if UNDER_MSYS2
+#define MKDIR(a,b) mkdir(a)
+#else
+#define MKDIR(a,b) mkdir(a,b)
+#endif
 
 #ifndef n_elts
 #define n_elts(x) (int)(sizeof(x)/sizeof((x)[0]))
@@ -877,7 +886,7 @@ static FILE *openfile ( struct file_details *file )
 			s = *q;
 			*q = '\0';
 			if ( procf && dflag )
-				mkdir ( p, 0777 );
+				MKDIR( p, 0777 );
 			*q = '/';
 			if ( s == ']' )
 				break;
@@ -3011,7 +3020,7 @@ static struct option long_options[] =
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.8, January 2024\n", progname );
+	printf ("%s version 3.9, April 2024\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>\n",
 			 progname );
 	if ( full )

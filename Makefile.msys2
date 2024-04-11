@@ -3,7 +3,7 @@
 # Set this to 1 if you want to include magtape device support
 HAVE_MTIO = 0
 # Set this to 1 if you are building under MSYS2 on Windows
-UNDER_MSYS2 = 0
+UNDER_MSYS2 = 1
 
 include Makefile.common
 
