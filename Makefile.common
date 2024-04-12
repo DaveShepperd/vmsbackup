@@ -27,16 +27,19 @@ MANDIR=/usr/man/man$(MANSEC)
 #
 #default: vmsbackup cp_tape dmp_tfile ext_tfile unpack_tap
 
+%.o : %.c Makefile
+	$(CC) -c $(CFLAGS) $<
+
 vmsbackup: vmsbackup.o match.o
-	cc $(LFLAGS) -o vmsbackup vmsbackup.o match.o 
+	$(CC) $(LFLAGS) -o vmsbackup vmsbackup.o match.o 
 cp_tape: cp_tape.o
-	cc $(LFLAGS) -o $@ $<
+	$(CC) $(LFLAGS) -o $@ $<
 dmp_tfile: dmp_tfile.o
-	cc $(LFLAGS) -o $@ $<
+	$(CC) $(LFLAGS) -o $@ $<
 ext_tfile: ext_tfile.o
-	cc $(LFLAGS) -o $@ $<
+	$(CC) $(LFLAGS) -o $@ $<
 unpack_tap: unpack_tap.o
-	cc $(LFLAGS) -o $@ $<
+	$(CC) $(LFLAGS) -o $@ $<
 
 install:
 	install -m $(MODE) -o $(OWNER) -s vmsbackup $(BINDIR)	
