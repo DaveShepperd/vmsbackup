@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <!--    <link rel="stylesheet" href="style.css"> -->
+  <title>VMSBACKUP</title>
+  <style>
+  table {
+    border-collapse: collapse;
+    width: 50%;
+  }
+  
+  th, td {
+    text-align: left;
+    padding: 2px;
+  }
+  
+  tr:nth-child(even) {
+    background-color: #D6EEEE;
+  }
+  .TblCntr table
+  {
+		margin: 10px;
+		border:1px solid #000;
+    border-collapse: collapse;
+    width: 50%;
+    align: left;
+  }
+  .TblCntr tr
+  {
+    border: 2px solid white;
+  }
+  .TblCntr th
+  {
+    border: 2px solid white;
+    text-align: center;
+    padding: 2px;
+  }
+  .TblCntr td
+  {
+    border: 2px solid white;
+    text-align: center;
+    padding: 2px;
+  }
+  .TblCntr tr:nth-child(even)
+  {
+      background-color: #D6EEEE;
+  }
+	.Tbl3 td:nth-of-type(3n+1),th:nth-of-type(3n+1)
+	{
+			text-align: center;
+	}
+	.Tbl3 th:nth-of-type(3n+2)
+	{
+			text-align: center;
+	}
+	.Tbl3 td:nth-of-type(3n+3),th:nth-of-type(3n+3)
+	{
+			text-align: left;
+	}
+	.Tbl2 td:nth-of-type(2n+1),th:nth-of-type(2n+1)
+	{
+			text-align: center;
+	}
+  </style>
+</head>
+<body>
+<div style="width: 25%;text-align:center;">
+  <h1>VMSBACKUP</h1>
+  <p>
+  Tool to decode VAX/VMS backup savesets. This file was produced mainly by copying and pasting bits from the README.md file adding in the html tags where appropriate.
+  </p>
+  <p>
+  The tape program is orginally written by John Douglas Carey and the pattern matching routine by some unknown on the net.
+  </p>
+  <p>
+  The remote tape option use the rmtlib from mod.sources. It is excluded by default with the MinGW and MSYS2 builds.
+  </p>
+  <p>
+  The program was originally tested on vax and sun. The 3.10 version has only been tested on recent versions of Linux (Fedora 39, Ubuntu 20, PiOS 6.6 and Windows 10 under MinGW-32 and MSYS2 (32 bit via multi-lib).
+  </p>
+</div>
+<!--
+<div style="border: 2px solid black;margin:4px;padding: 4px">
+</div>
+-->
+<div style="width: 100%;text-align:left;">
+  <h2>History:</h2>
+  <table class="Tbl3">
+    <colgroup>
+    <col span="2" style="text-align:center"><col style="text-align:left;">
+    </colgroup>
+    <tr>
+    <th>Version</th><th>Date</th><th>Description</th>
+    </tr>
+    <tr>
+    <td>1.0</td><td>September 1984</td><td>Can only read variable length records.</td>
+    </tr>
+    <tr>
+    <td>1.1</td><td></td><td>Cleaned up the program from the original hack.<br>Can now read stream files.</td>
+    </tr>
+    <tr>
+    <td>1.2</td><td></td><td>Now convert filename from VMS to UNIX and creates sub-directories.</td>
+    </tr>
+    <tr>
+    <td>1.3</td><td></td><td>Works on the Pyramid if SWAP is defined.</td>
+    </tr>
+    <tr>
+    <td>1.4</td><td></td><td>Reads files spanning multiple tape blocks.</td>
+    </tr>
+    <tr>
+    <td>1.5</td><td></td><td>Always reset reclen = 0 on file open.<br>Now output fixed length records.</td>
+    </tr>
+    <tr>
+    <td>2.0</td><td>July 1985</td><td>VMS Version 4.0 causes a rethink !!<br>
+    Now use mtio operations instead of opening and closing file.<br>
+    Blocksize now grabed from the label.</td>
+    </tr>
+    <tr>
+    <td>2.1</td><td>September 1985</td><td>Handle variable length records of zero length.</td>
+    </tr>
+    <tr>
+    <td>2.2</td><td>July 1986</td><td>Handle FORTRAN records of zero length.<br>
+    Inserted exit(0) at end of program.<br>
+    Distributed program in aus.sources.</td>
+    </tr>
+    <tr>
+    <td>2.3</td><td>August 1986</td><td>Handle FORTRAN records with record length fields at the end of a block.<br>
+    Put debug output to a file.<br>
+    Distributed program in net.sources</td>
+    </tr>
+    <tr>
+    <td>3.0</td><td>December 1986</td><td>Handle multiple saveset.<br>
+    Remote tape.<br>
+    Interactive mode.<br>
+    File name selection with meta-characters.<br>
+    Convert ; to : in VMS filenames.<br>
+    Flag for usage of VMS directory structure.<br>
+    Flag for "useless" files eg. *.exe.<br>
+    Flag for use VMS version in file names.<br>
+    Flag for verbose mode.<br>
+    Flag to list the contents of the tape.<br>
+    Distributed to mod.sources.<br></td>
+    </tr>
+    <tr>
+    <td>3.1</td><td>March 2003</td><td>First mod by <a href="https://github.com/daveshepperd/vmsbackup.git">Dave Shepperd (DMS).</a><br>
+    ANSI'fy the source.<br>
+    Added option, -i, to read "tape file" from disk.<br>
+    Added option, -n, to read specific saveset from disk/tape.<br>
+    changed option, -v, to accept a bit mask to enable various squawks<br>
+    Optimise the writing of data (avoid doing single char output where possible).<br>
+    Added handling of redundancy groups and duplicate and missing blocks.<br>
+    Fixed numerous crashes caused by various mis-decodes.<br>
+    Record and decode errors are no longer fatal.<br>
+    Cut and pasted select features from the 4-1-1 release.<br>
+    Added vms2unix date function and utime()'d extracted files.<br>
+    Always walk the file data chain even when only doing a directory listing in order to identify those files which may present decode or other errors.<br>
+    Due to bizzare data in the VAR records found in .mai and .dir files, force it never to extract them or even walk the chain.<br>
+    Recover from BACKUP's occasional mistake of leaving off the record length bytes from record 0 of vfc files.<br>
+    Added some 'doxygen'ated (but untested) comments.<br>
+    <em style="color:red">NOTE:</em>
+    <em>
+    There may be a problem with timestamps since I found several savesets made by VMS versions 3.x and 4.x where the date seemed to be ~4 years too young. Newer savesets (> VMS 5.0?) seem to have dates set correctly; Was there a change in the VMS epoch at some point?.
+    </em>
+    </td>
+    </tr>
+    <tr>
+    <td>3.2</td><td>April 2020</td><td>(DMS) Added -I, to read SIMH format 'tape file' from disk.</td>
+    </tr>
+    <tr>
+    <td>3.3</td><td>Janurary 2022</td><td>(DMS) Fixed comments. Added a -S to skip to HDR1 record.</td>
+    </tr>
+    <tr>
+    <td>3.4</td><td>November 2023</td><td>(DMS) Added -R to make it not lowercase filenames and to strip off the file version number completely and only output the latest version of any file.</td>
+    </tr>
+    <tr>
+    <td>3.5</td><td>January 2024</td><td>(DMS) Added -L to provide lowercase directory and filenames.</td>
+    </tr>
+    <tr>
+    <td>3.6</td><td>January 2024</td><td>(DMS) Added -E, reworked the -e option a bit.<br>
+    Fixed some comments.</td>
+    </tr>
+    <tr>
+    <td>3.7</td><td>Feburary 2024</td><td>(DMS) Fixed problems with and added support for optional VFC carriage control characters in output.<br>
+    Changed the way it handles record delimiters.</td>
+    </tr>
+    <tr>
+    <td>3.8</td><td>March 2024</td><td>(DMS) Added support for fixed length input records.<br>
+    Added support for getopt_long() and as a result added options:<br>
+    --delimiter<br>
+    --dvd (same as -i)<br>
+    --extract<br>
+    --file (sane as -f)<br>
+    --hierarchy (same as -d)<br>
+    --hdr1 (same as -s)<br>
+    --help (same as -h)<br>
+    --list (same as -t)<br>
+    --lowercase (same as -l)<br>
+    --noversions (same as -R)<br>
+    --prompt (same as -w)<br>
+    --binary<br>
+    --setname (same as -n)<br>
+    --simh (same as -I)<br>
+    --verbose (same as -v)<br>
+    --vfc (same as -F)</td>
+    </tr>
+    <tr>
+    <td>3.9</td><td>April 2024</td><td>(DMS) Added support for building under MSYS2 on Windows.</td>
+    </tr>
+    <tr>
+    <td>3.10</td><td>April 2024</td><td>(DMS) Fixed MSYS2 builds and added ones for Linux, MinGW32 and PiOS (32 bit only).</td>
+    </tr>
+  </table>
+
+  <h2>Help message</h2>
+  <pre>
+Usage:  vmsbackup -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>
+Where {} indicates one option is required, [] indicates optional and <> indicates parameter:
+ -c               Convert VMS filename version delimiter ';' to ':'
+ --delimiter[=x]  Convert VMS filename version delimiter from ';' to whatever 'x' is (x must be printable, defaults 'x' to ':')
+ -d, --hierarchy  Maintain VMS directory structure during extraction.
+ -x               Extract files from saveset. See -e, -E or --extract below. (Same as --extract=0).
+ -e               Extract all files regardless of filetype (except .dir and .mai).
+ -E               Extract all files regardless of filetype (including .dir and .mai).
+ --extract[=n]    Extract all files according to value of n:
+                     0  = All except .DIR,.EXE,.LIB,.MAI,.OBJ,.ODL,.OLB,.PMD,.SYS,.TLB,.TLO,.TSK,.UPD (default)
+                     1  = All except .DIR,.MAI,.ODL,.OLB,.PMD,.SYS,.TLB,.TLO,.TSK,.UPD
+                     2+ = All except .DIR,.MAI
+ -f name          See --file below.
+ --file=name      Name of image or device. Alternate to -f. Required parameter (no default)
+ -F n             See --vfc below.
+ --binary         Output records in binary while preserving record formats and attributes by including them in the filename.
+                      The output files will be named x.x[;version][;format;size;att]
+                      I.e. if the record format of file FOO.BAR;1 is FIXED with size 512 and no attributes its output will be
+                      named FOO.BAR;1;FIX;512;NONE where the ';' is the delimiter specified with --delimiter or ';' by default.
+                      If the format of file FOO.BAR;1 is VAR, then the size is that of the longest record.
+                      I.e. if the longest record is 77 bytes and the attributes is CR, the name will be FOO.BAR;1;VAR;77;CR
+                      The formats can be one of RAW, FIX, VAR, VFC, VFCn, STM, STMCR, STMLF where the 'n' in VFCn is the
+                      number of VFC bytes in the record. The attributes can be one or more of NONE, FTN, CR, PRN and BLK
+ --vfc[=n]        (Alternate to -F) Handle VFC records according to 'n' as:
+                      0 - Discard the VFC bytes and output records with just a newline at the end of line.
+                      1 - Decode the two VFC bytes into appropriate Fortran carriage control (Default).
+                      2 - Insert the two VFC bytes at the head of each record unchanged.
+ -h, --help       This message.
+ -i, --dvd        Input is of type DVD disk image of tape (aka Atari format).
+ -I, --simh       Input is of type SIMH format disk image of tape.
+ -l, --lowercase  Lowercase all directory and filenames.
+ -R, --noversions Strip off file version number and output only latest version.
+ -n name          See --setname below.
+ --setname=name   Select the name of the saveset in the tape image as found in a HDR1 record.
+ -s n             See --hdr1 below.
+ --hdr1=n         'n' is a decimal number indicating which file delimited by HDR1 records to unpack. (Starts at 1).
+                      I.e. --hdr1number=3 means skip to the third HDR1 then unpack just that file.
+ -t, --list       List file contents to stdout.
+ -v n             See --verbose below.
+ --verbose=n      'n' is a bitmask of items to enable verbose level:
+                      0x01 - small announcements of progress.
+                      0x02 - announcements about file read primitives.
+                      0x04 - announcements about file write primitives.
+                      0x08 - used to debug buffer queues.
+                      0x10 - lots of other debugging info.
+                      0x20 - block reads if -i or -I mode.
+ -w, --prompt     Prompt before writing each output file.
+
+<em style="color:red">NOTE 1:</em><em>If files are found with VAR or VFC formats but no record attribute set, the filename will
+be output as x.x[;version];format;size;NONE; where ';' is the delimiter set in --delimiter (; by
+default) and ';format' will be one of ;VAR or ;VFC and ;size will be size of the longest record
+found in the file.
+</em>
+
+<em style="color:red">NOTE 2:</em><em>If an invalid length is discovered in a VAR or VFC record the file will be renamed
+x.x[;version];format;size;att;may_be_corrupt_at_x where ;format will be one of ;VAR or ;VFC,
+;size will be the length of the longest record, ;att will hold the attribute (CR, FTN, PRN, BLK)
+and _x is the byte offset in the file where the invalid record can be found. It is expected
+a custom program to be used to attempt to extract as much of the files's content as possible using a custom
+built application (not provided).
+</em>
+  </pre>
+  <h2>Record formats</h2>
+  <p>
+  In case one does not know already, the binary format of VAR (and VFC) format records is:
+  </p>
+  <table class="Tbl2">
+    <tr>
+    <th>Byte Offset</th><th>Description</th>
+    </tr>
+    <tr>
+    <td>0</td><td>Least significant bits of 16 bit record count (n&0xFF)</td>
+    </tr>
+    <tr>
+    <td>1</td><td>Most significatn bits of 16 bit record count (n&gt;&gt;8)</td>
+    </tr>
+    <tr>
+    <td>...</td><td>n bytes of record content.</td>
+    </tr>
+    <tr>
+    <td>n+2</td><td>an Optional byte. Only present if n is odd.</td>
+    </tr>
+  </table>
+  <p>
+  If n is zero, the record will consist of just the two byte count. A record count greater than 0x7FFF (32767) is always illegal. Technically, in the case of vmsbackup restoring a file, a legal record count will never be greater than the maximimu record size listed in the file's meta data which will be reported in the directory listing (via -t or --list) after the VAR format ID or in the filename if it chose to restore the file in binary.
+  </p>
+  <p>
+  I.e. If the record is of the ASCII "HELLO", the bytes in the record will be (in hex):
+  </p>
+  <pre>
+  05 00 48 45 4C 4C 4F xx
+  </pre>
+  <p>
+  where 'xx' is a filler byte, probably 00. It is not included in the record count but it is just to ensure the record count of the next record is on an even byte bounday. I'd guess that would be due to the VAX's CPU needing suitably aligned addresses to access entities greater than 8 bits.
+  </p>
+  <p>
+  A blank line will contain:
+  </p>
+  <pre>
+  00 00
+  </pre>
+  <p>
+  The format of the VFC files is nearly the same as VAR above. The only difference is there are n bytes of fortran carriage control bytes following the 2 bytes of record size. The VFC bytes are included in the record's size. In all the cases I've seen with this, there have only ever been 2 bytes of VFC. The format will be listed in the directory and filenames as VFCx with the 'x' being the number of VFC bytes (always 2 as far as I've seen as mentioned) but if there is a different number of bytes, the 'x' will be set accordingly.
+  </p>
+  <p>
+  In the case of a 2 byte VFC, the value of the first byte (vfc0) ID's the start of the output according to:
+  </p>
+  <table class="Tbl2">
+    <tr>
+    <th>Char</th><th>Description</th>
+    </tr>
+    <tr>
+    <td>0</td><td>(as in nul) no leading carriage control</td>
+    </tr>
+    <tr>
+    <td>' '</td><td>(ASCII space) Normal: \n followed by text followed by \r</td>
+    </tr>
+    <tr>
+    <td>'$'</td><td>(ASCII dollar) Prompt: \n followed by text, no \r at end of line</td>
+    </tr>
+    <tr>
+    <td>'+'</td><td>(ASCII plus) Overstrike: text followed by \r</td>
+    </tr>
+    <tr>
+    <td>'0'</td><td>(ASCII zero) Double space: \n \n followed by text followed by \r</td>
+    </tr>
+    <tr>
+    <td>'1'</td><td>(ASCII one) Formfeed: \f followed by text followed by \r</td>
+    </tr>
+    <tr>
+    <td>any</td><td>(any other) same as Normal above</td>
+    </tr>
+  </table>
+  <p>
+  Despite the comments above about the end-of-record carriage control, it is actually determined by the second byte (vfc1) and handled separately as:
+  </p>
+  <table class="Tbl2">
+    <tr>
+    <th>Bit in byte</th><th></th>
+    </tr>
+    <tr>
+    <th>7 6 5 4 3 2 1 0</th><th>Description</th>
+    </tr>
+    <tr>
+    <td>0 0 0 0 0 0 0 0</td><td>no trailing carriage control</td>
+    </tr>
+    <tr>
+    <td>0 x x x x x x x</td><td>bits 6-0 indicate how many nl's to output followed by a cr</td>
+    </tr>
+    <tr>
+    <td>1 0 0 x x x x x</td><td>bits 4-0 describe the end-of-record char (normally a 0x0D)</td>
+    </tr>
+    <tr>
+    <td>1 0 1 * * * * *</td><td>just one cr</td>
+    </tr>
+    <tr>
+    <td>1 1 0 0 x x x x</td><td>bits 3-0 describe bits to send to VFU. If no VFU, just one cr</td>
+    </tr>
+    <tr>
+    <td>1 1 0 1 * * * *</td><td>just one cr</td>
+    </tr>
+    <tr>
+    <td>1 1 1 * * * * *</td><td>just one cr</td>
+    </tr>
+  </table>
+  <p>
+  where 'x' can be 0 or 1 and means something and '*' means not used.
+  </p>
+  <p>
+  For example, if the VFC record is of a single line of ASCII "HELLO", the bytes in the record will probably be (in hex):
+  </p>
+  <pre>
+  07 00 01 8D 48 45 4C 4C 4F xx
+  </pre>
+  <p>
+  As with VAR, the xx is a filler byte.
+  </p>
+  <p>
+  Where vfc0 (0x01) indicates the leading character is "normal" and to output a newline (0x0A) and vfc1 (0x8D) indicates to output a 0x0D (carrage return) at the end of the record.
+  </p>
+</div>
+</body>
+</html>

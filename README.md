@@ -223,7 +223,7 @@ If an invalid length is discovered in a VAR or VFC record the file will be renam
 x.x[;version];format;size;att;may_be_corrupt_at_x where ;format will be one of ;VAR or ;VFC,
 ;size will be the length of the longest record, ;att will hold the attribute (CR, FTN, PRN, BLK)
 and \_x is the byte offset in the file where the invalid record can be found. It is expected
-a custom program to be used to attempt to extract the records from the file using a custon
+a custom program to be used to attempt to extract as much of the files's content as possible using a custom
 built application (not provided).
 
 **NOTE 3:**

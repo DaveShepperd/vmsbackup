@@ -259,6 +259,7 @@
 			<F N="match.c"/>
 			<F N="unpack_tap.c"/>
 			<F N="vmsbackup.c"/>
+			<F N="vmsbackup.html"/>
 		</Folder>
 		<Folder
 			Name="Header Files"
@@ -277,7 +278,19 @@
 			Filters=""
 			GUID="{DB707434-CF3B-47C2-8DEA-705F0D70FFDC}">
 			<F
-				N="Makefile"
+				N="Makefile.common"
+				Type="Makefile"/>
+			<F
+				N="Makefile.linux"
+				Type="Makefile"/>
+			<F
+				N="Makefile.mingw32"
+				Type="Makefile"/>
+			<F
+				N="Makefile.msys2"
+				Type="Makefile"/>
+			<F
+				N="Makefile.pi32"
 				Type="Makefile"/>
 			<F N="README.md"/>
 		</Folder>

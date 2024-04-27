@@ -136,6 +136,10 @@
  *  Versin 3.9 - April 2024 (DMS)
  *      Added support for building under MSYS2 on Windows
  *
+ *  Versin 3.10 - April 2024 (DMS)
+ *  	Fixed MSYS2 builds and added ones for Linux, MinGW32 and
+ *  	PiOS (32 bit only).
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -169,7 +173,7 @@
 #endif
 #include	<sys/file.h>
 
-#if UNDER_MSYS2
+#if MSYS2 || MINGW
 #define MKDIR(a,b) mkdir(a)
 #else
 #define MKDIR(a,b) mkdir(a,b)
@@ -3020,7 +3024,7 @@ static struct option long_options[] =
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.9, April 2024\n", progname );
+	printf ("%s version 3.10, April 2024\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>\n",
 			 progname );
 	if ( full )

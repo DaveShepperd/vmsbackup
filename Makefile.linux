@@ -1,16 +1,14 @@
-# This is for an MSYS2 on Windows build
-# For now, vmsbackup has to be built to run in 32 bit mode.
+# This is for a generic Linux build
+# For now, macxx has to be built to run in 32 bit mode.
 
 HOST_MACH = -m32
 HAVE_MTIO = 0
 DELIM = '
 PiOS32 = 0
 LINUX = 1
-MSYS2 = 1
+MSYS2 = 0
 MINGW = 0
-NO_CP_TAPE = 1
-NO_UNPACK_TAP = 1
-EXTRA_DEFINES = -DMSYS2
+EXTRA_DEFINES =
 DBG = #-g -DDEBUG
 OPT = -O -DNDEBUG
 CC = gcc
@@ -19,5 +17,4 @@ RM = rm -f
 RMDIR = rm -rf
 
 include Makefile.common
-
 

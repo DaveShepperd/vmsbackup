@@ -1,0 +1,22 @@
+# This is for a MinGW-32 system running on Windows. Only been checked on a Windows 10 system.
+# For now, vmsbackup has to be built to run in 32 bit mode.
+
+HOST_MACH = -m32
+HAVE_MTIO = 0
+DELIM = ^
+PiOS32 = 0
+LINUX = 0
+MSYS2 = 0
+MINGW = 1
+NO_CP_TAPE = 1
+NO_UNPACK_TAP = 1
+EXTRA_DEFINES = -DMINGW
+DBG = #-g -DDEBUG
+OPT = -O -DNDEBUG
+CC = mingw32-gcc
+ECHO = echo
+RM = cmd /c del /q/s
+RMDIR = cmd /c rmdir /q/s
+
+include Makefile.common
+

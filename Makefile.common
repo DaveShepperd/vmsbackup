@@ -1,51 +1,75 @@
-CC= gcc
+TARGET = vmsbackup
+
+LIBS  = 
 DEFS  = -DHAVE_STRERROR
-#DEFS += -DSWAP
-#DEFS += -DREMOTE
 DEFS += -D_LARGEFILE64_SOURCE
 DEFS += -D_FILE_OFFSET_BITS=64
-ifeq ($(UNDER_MSYS2),1)
-DEFS += -DUNDER_MSYS2
-endif
 ifeq ($(HAVE_MTIO),1)
 DEFS += -DHAVE_MTIO
 endif
 
-MACH= -m32
-OPT= -O2
-DBG= #-g #-DDEBUG
-WARNS= -Wall #-ansi -pedantic
-CFLAGS= $(DEFS) $(MACH) $(OPT) $(DBG) $(WARNS) 
-LFLAGS= $(MACH)
-LIBS= -lrmt   			# remote magtape library
-OWNER=tar			# user for remote tape access
-MODE=4755
-BINDIR=/usr/local/bin
-MANSEC=l
-MANDIR=/usr/man/man$(MANSEC)
+DEFS += $(EXTRA_DEFINES)
+LIBS += $(EXTRA_LIBS)
+
+ifndef OPT
+	OPT = -O2 -DNDEBUG
+endif
+ifndef DBG
+	DBG = #-g #-DDEBUG
+endif
+
+EXE =
+ifeq ($(MINGW),1)
+	EXE = .exe
+endif
+ifeq ($(MSYS2),1)
+	EXE = .exe
+endif
+
+WARNS = -Wall #-ansi -pedantic
+CFLAGS = $(DEFS) $(HOST_MACH) $(OPT) $(DBG) $(WARNS) 
+LFLAGS = $(HOST_MACH)
+ifeq ($(HAVE_MTIO),1)
+LIBS += -lrmt   			# remote magtape library
+endif
+
+ifndef NO_CP_TAPE
+ALSO_CP_TAPE = cp_tape$(EXE)
+endif
+ifndef NO_UNPACK_TAP
+ALSO_UNPACK_TAP = unpack_tap$(EXE)
+endif
+
+#OWNER = tar			# user for remote tape access
+#MODE = 4755
+#BINDIR = /usr/local/bin
+#MANSEC = l
+#MANDIR = /usr/man/man$(MANSEC)
 
 #
-#default: vmsbackup cp_tape dmp_tfile ext_tfile unpack_tap
 
-%.o : %.c Makefile
+default: vmsbackup$(EXE) dmp_tfile$(EXE) ext_tfile$(EXE) $(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP)
+
+%.o : %.c Makefile.common
 	$(CC) -c $(CFLAGS) $<
 
-vmsbackup: vmsbackup.o match.o
-	$(CC) $(LFLAGS) -o vmsbackup vmsbackup.o match.o 
-cp_tape: cp_tape.o
+vmsbackup$(EXE): vmsbackup.o match.o
+	$(CC) $(LFLAGS) -o $@ $^
+cp_tape$(EXE): cp_tape.o
 	$(CC) $(LFLAGS) -o $@ $<
-dmp_tfile: dmp_tfile.o
+dmp_tfile$(EXE): dmp_tfile.o
 	$(CC) $(LFLAGS) -o $@ $<
-ext_tfile: ext_tfile.o
+ext_tfile$(EXE): ext_tfile.o
 	$(CC) $(LFLAGS) -o $@ $<
-unpack_tap: unpack_tap.o
+unpack_tap$(EXE): unpack_tap.o
 	$(CC) $(LFLAGS) -o $@ $<
 
-install:
-	install -m $(MODE) -o $(OWNER) -s vmsbackup $(BINDIR)	
-	cp vmsbackup.1 $(MANDIR)/vmsbackup.$(MANSEC)
+#install:
+#	install -m $(MODE) -o $(OWNER) -s vmsbackup $(BINDIR)	
+#	cp vmsbackup.1 $(MANDIR)/vmsbackup.$(MANSEC)
 clean:
-	rm -f vmsbackup vmsbackup.exe ext_tfile ext_tfile.exe cp_tape cp_tape.exe dmp_tfile dmp_tfile.exe unpack_tap unpack_tap.exe *.o core
-shar:
-	shar -a README vmsbackup.1 Makefile vmsbackup.c match.c \
-	    > vmsbackup.shar
+	$(RM) vmsbackup$(EXE) ext_tfile$(EXE) cp_tape$(EXE) dmp_tfile$(EXE) unpack_tap$(EXE) *.o core
+
+#shar:
+#	shar -a README vmsbackup.1 Makefile vmsbackup.c match.c \
+#	    > vmsbackup.shar
