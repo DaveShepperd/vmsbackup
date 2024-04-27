@@ -131,7 +131,7 @@
  *  	Write binary output and filename if record errors
  *  	detected.
  *  	Updated help message.
- *  	See README.md for further details.
+ *  	See README.md or vmsbackup.html for further details.
  *
  *  Versin 3.9 - April 2024 (DMS)
  *      Added support for building under MSYS2 on Windows
