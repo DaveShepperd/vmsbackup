@@ -11,13 +11,6 @@ endif
 DEFS += $(EXTRA_DEFINES)
 LIBS += $(EXTRA_LIBS)
 
-ifndef OPT
-	OPT = -O2 -DNDEBUG
-endif
-ifndef DBG
-	DBG = #-g #-DDEBUG
-endif
-
 EXE =
 ifeq ($(MINGW),1)
 	EXE = .exe
