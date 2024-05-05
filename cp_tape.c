@@ -28,7 +28,7 @@ int main( int argc, char *argv[] )
     struct mtop ops;
     int tape_marks = 0;
     unsigned long total = 0;
-    char *dst = "/tmp/tape";
+    const char *dst = "/tmp/tape";
 
     fd = open( "/dev/st0", O_RDONLY );
     if ( fd < 0 )
@@ -114,7 +114,7 @@ int main( int argc, char *argv[] )
 	if ( !sts )
 	{
 	    tape_marks |= 1;
-	    if ( (tape_marks&3) == 3 )	// two tape marks in a row is EOT
+	    if ( (tape_marks&3) == 3 )	/* two tape marks in a row is EOT */
 	    {
 		break;
 	    }

@@ -161,6 +161,9 @@ History:
   * Fixed MSYS2 builds and added ones for Linux, MinGW32 and PiOS (32 bit only).
   * Added a vmsbackup.html document. Mainly just rehash of this README.md.
 
+**Versin 3.11 - April 2024 (DMS)**
+  * Fixed MSYS2 and MinGW builds. Needed the O_BINARY flag.
+
 **Some original author details**
 ```
 Computer Centre

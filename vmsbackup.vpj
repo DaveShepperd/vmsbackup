@@ -10,7 +10,8 @@
 		DebugCallbackName="gdb"
 		Version="1"
 		OutputFile="%bdvmsbackup"
-		CompilerConfigName="Latest Version">
+		CompilerConfigName="Latest Version"
+		Defines='"/DHAVE_STRERROR"'>
 		<Menu>
 			<Target
 				Name="Compile"
@@ -21,7 +22,9 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='g++ -c %xup  %defd -g -o "%bd%n%oe" %i "%f"'/>
+				<Exec
+					CmdLine='g++ -c %xup %defd -g -Wall -pedantic -Werror %~other -o "%bd%n%oe" %i %f'
+					OtherOptions="-m32"/>
 			</Target>
 			<Target
 				Name="Link"
@@ -32,7 +35,9 @@
 				Deletable="0"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='g++ %xup -g -o "%o" %f %libs'/>
+				<Exec
+					CmdLine='g++ %xup -g -Wall -pedantic -Werror %~other -o "%o" %objs'
+					OtherOptions="-m32"/>
 			</Target>
 			<Target
 				Name="Build"
@@ -125,6 +130,13 @@
 				<Exec CmdLine='gdc -c -g -o "%bd%n.o" "%f"'/>
 			</Rule>
 		</Rules>
+		<Includes/>
+		<Libs PreObjects="0"/>
+		<List Name="GNUC Options">
+			<Item
+				Name="LinkerOutputType"
+				Value="Executable"/>
+		</List>
 	</Config>
 	<Config
 		Name="Release"
@@ -132,7 +144,8 @@
 		DebugCallbackName="gdb"
 		Version="1"
 		OutputFile="%bdvmsbackup"
-		CompilerConfigName="Latest Version">
+		CompilerConfigName="Latest Version"
+		Defines='"/DHAVE_STRERROR"'>
 		<Menu>
 			<Target
 				Name="Compile"
@@ -143,7 +156,9 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='g++ -c %xup %defd -o "%bd%n%oe" %i "%f"'/>
+				<Exec
+					CmdLine='g++ -c %xup %defd %~other -o "%bd%n%oe" %i %f'
+					OtherOptions="-m32"/>
 			</Target>
 			<Target
 				Name="Link"
@@ -154,7 +169,9 @@
 				Deletable="0"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='g++ %xup -o "%o" %f %libs'/>
+				<Exec
+					CmdLine='g++ %xup %~other -o "%o" %objs'
+					OtherOptions="-m32"/>
 			</Target>
 			<Target
 				Name="Build"
@@ -247,17 +264,20 @@
 				<Exec CmdLine='gdc -c -g -o "%bd%n.o" "%f"'/>
 			</Rule>
 		</Rules>
+		<Includes/>
+		<Libs PreObjects="0"/>
+		<List Name="GNUC Options">
+			<Item
+				Name="LinkerOutputType"
+				Value="Executable"/>
+		</List>
 	</Config>
 	<Files>
 		<Folder
 			Name="Source Files"
 			Filters="*.c;*.C;*.cc;*.cpp;*.cp;*.cxx;*.c++;*.prg;*.pas;*.dpr;*.asm;*.s;*.bas;*.java;*.cs;*.sc;*.scala;*.e;*.cob;*.html;*.rc;*.tcl;*.py;*.pl;*.d;*.m;*.mm;*.go;*.groovy;*.gsh"
 			GUID="{77ABED19-9FE1-49AC-9890-B79DD8B92417}">
-			<F N="cp_tape.c"/>
-			<F N="dmp_tfile.c"/>
-			<F N="ext_tfile.c"/>
 			<F N="match.c"/>
-			<F N="unpack_tap.c"/>
 			<F N="vmsbackup.c"/>
 			<F N="vmsbackup.html"/>
 		</Folder>

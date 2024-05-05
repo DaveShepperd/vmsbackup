@@ -14,9 +14,9 @@ typedef int BOOLEAN;
 #define FALSE 0
 #define EOS '\000'
 
-static BOOLEAN do_list ();
-static char nextch ();
-static VOID list_parse ();
+static BOOLEAN do_list (const char *string, const char *pattern);
+static char nextch (const char **patp);
+static VOID list_parse (const char **patp, char *lowp, char *highp);
 
 
 /*
@@ -27,8 +27,8 @@ static VOID list_parse ();
  *  SYNOPSIS
  *
  *	BOOLEAN match (string, pattern)
- *	register char *string;
- *	register char *pattern;
+ *	char *string;
+ *	char *pattern;
  *
  *  DESCRIPTION
  *
@@ -71,11 +71,9 @@ static VOID list_parse ();
  *
  */
 
-BOOLEAN match (string, pattern)
-register char *string;
-register char *pattern;
+BOOLEAN match (const char *string,const char *pattern)
 {
-    register BOOLEAN ismatch;
+    BOOLEAN ismatch;
 
     ismatch = FALSE;
     switch (*pattern) {
@@ -120,8 +118,8 @@ register char *pattern;
  *  SYNOPSIS
  *
  *	static BOOLEAN do_list (string, pattern)
- *	register char *string;
- *	register char *pattern;
+ *	char *string;
+ *	char *pattern;
  *
  *  DESCRIPTION
  *
@@ -188,15 +186,13 @@ register char *pattern;
  *
  */
 
-static BOOLEAN do_list (string, pattern)
-register char *string;
-char *pattern;
+static BOOLEAN do_list (const char *string, const char *pattern)
 {
-    register BOOLEAN ismatch;
-    register BOOLEAN if_found;
-    register BOOLEAN if_not_found;
-    auto char lower;
-    auto char upper;
+    BOOLEAN ismatch;
+    BOOLEAN if_found;
+    BOOLEAN if_not_found;
+    char lower;
+    char upper;
 
     pattern++;
     if (*pattern == '!') {
@@ -250,10 +246,7 @@ char *pattern;
  *
  */
 
-static VOID list_parse (patp, lowp, highp)
-char **patp;
-char *lowp;
-char *highp;
+static VOID list_parse (const char **patp, char *lowp, char *highp)
 {
     *lowp = nextch (patp);
     if (**patp == '-') {
@@ -287,12 +280,11 @@ char *highp;
  *
  */
 
-static char nextch (patp)
-char **patp;
+static char nextch (const char **patp)
 {
-    register char ch;
-    register char chsum;
-    register int count;
+    char ch;
+    char chsum;
+    int count;
 
     ch = *(*patp)++;
     if (ch == '\\') {

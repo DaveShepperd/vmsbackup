@@ -4,6 +4,7 @@ LIBS  =
 DEFS  = -DHAVE_STRERROR
 DEFS += -D_LARGEFILE64_SOURCE
 DEFS += -D_FILE_OFFSET_BITS=64
+DEFS += -D_ISOC99_SOURCE
 ifeq ($(HAVE_MTIO),1)
 DEFS += -DHAVE_MTIO
 endif
@@ -19,7 +20,7 @@ ifeq ($(MSYS2),1)
 	EXE = .exe
 endif
 
-WARNS = -Wall #-ansi -pedantic
+WARNS = -Wall -ansi #-pedantic
 CFLAGS = $(DEFS) $(HOST_MACH) $(OPT) $(DBG) $(WARNS) 
 LFLAGS = $(HOST_MACH)
 ifeq ($(HAVE_MTIO),1)

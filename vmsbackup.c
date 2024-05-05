@@ -140,6 +140,10 @@
  *  	Fixed MSYS2 builds and added ones for Linux, MinGW32 and
  *  	PiOS (32 bit only).
  *
+ *  Versin 3.11 - April 2024 (DMS)
+ *  	Fixed MSYS2 and MinGW builds. Needed the O_BINARY and
+ *  	"b" flags.
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -154,6 +158,7 @@
 #include	<stdio.h>
 #include	<ctype.h>
 #include	<string.h>
+#include	<strings.h>
 #include	<stdlib.h>
 #include	<unistd.h>
 #include	<getopt.h>
@@ -175,42 +180,20 @@
 
 #if MSYS2 || MINGW
 #define MKDIR(a,b) mkdir(a)
+#define OPEN_FLAGS O_RDONLY|O_BINARY
 #else
 #define MKDIR(a,b) mkdir(a,b)
+#define OPEN_FLAGS O_RDONLY
 #endif
 
 #ifndef n_elts
 #define n_elts(x) (int)(sizeof(x)/sizeof((x)[0]))
 #endif
 
+#define INT_SIZEOF(x) (int)(sizeof(x))
+
 extern int match ( const char *string, const char *pattern );
 static int typecmp ( const char *str, int which );
-
-/* Byte-swapping routines.  Note that these do not depend on the size
-   of datatypes such as short, long, etc., nor do they require us to
-   detect the endianness of the machine we are running on.  It is
-   possible they should be macros for speed, but I'm not sure it is
-   worth bothering.  We don't have signed versions although we could
-   add them if needed.  They are, of course little-endian as that is
-   the byteorder used by all integers in a BACKUP saveset.  */
-
-static inline unsigned long getu32 ( unsigned char *addr )
-{
-	unsigned long ans;
-	ans = addr[3];
-	ans = (ans<<8) | addr[2];
-	ans = (ans<<8) | addr[1];
-	ans = (ans<<8) | addr[0];
-	return ans;
-}
-
-static inline unsigned int getu16 ( unsigned char *addr )
-{
-	return(addr[1] << 8) | addr[0];
-}
-
-#define GETU16(x) getu16( (unsigned char *)&(x) )
-#define GETU32(x) getu32( (unsigned char *)&(x) )
 
 #define MAX_FILENAME_LEN (128)
 #define MAX_FORMAT_LEN	 (16)
@@ -410,6 +393,7 @@ int skipping;			/*!< Bit mask of errors as described below */
 #define VERB_QUEUE_LVL	(8)	/* squawk about queue handling */
 #define VERB_DEBUG_LVL	(16)	/* generic debug statements */
 #define VERB_BLOCK_LVL	(32) /* squawk during block processing */
+#define VERB_DEBUG_U32	(64) /* squawk about what getu32() does */
 
 char **gargv;
 int goptind, gargc;
@@ -445,6 +429,38 @@ static struct buff_ctl *buffers; /*!< pointer to array of buffers (0th entry is 
 static int freebuffs;		/*!< index to first item in freelist  */
 static int busybuffs;		/*!< index to first item in busy list */
 static int num_busys;		/*!< number of items currently on busy queue */
+
+/* Byte-swapping routines.  Note that these do not depend on the size
+   of datatypes such as short, long, etc., nor do they require us to
+   detect the endianness of the machine we are running on.  It is
+   possible they should be macros for speed, but I'm not sure it is
+   worth bothering.  We don't have signed versions although we could
+   add them if needed.  They are, of course little-endian as that is
+   the byteorder used by all integers in a BACKUP saveset.  */
+
+static unsigned long getu32 ( unsigned char *addr )
+{
+	unsigned long ans;
+	ans = addr[3];
+	ans = (ans<<8) | addr[2];
+	ans = (ans<<8) | addr[1];
+	ans = (ans<<8) | addr[0];
+	if ( (vflag&VERB_DEBUG_U32) )
+		printf("getu32(): %p=%02X %02X %02X %02x = 0x%lX (%ld)\n", (void *)addr, addr[0], addr[1], addr[2], addr[3], ans, ans);
+	return ans;
+}
+
+static unsigned int getu16 ( unsigned char *addr )
+{
+	unsigned int ans;
+	ans = (addr[1] << 8) | addr[0];
+	if ( (vflag&VERB_DEBUG_U32) )
+		printf("getu16(): %p=%02X %02X = 0x%X (%d)\n", (void *)addr, addr[0], addr[1], ans, ans);
+	return ans;
+}
+
+#define GETU16(x) getu16( (unsigned char *)&(x) )
+#define GETU32(x) getu32( (unsigned char *)&(x) )
 
 /**
  * Dump the contents (indicies only) of the busy and free queues.
@@ -1011,14 +1027,14 @@ static FILE *openfile ( struct file_details *file )
 	if ( procf )
 	{
 		FILE *fp;
-		fp = fopen(p,"w");
+		fp = fopen(p,"wb");
 		if ( !fp )
 		{
 			printf("Snark: Failed to open '%s' for output: %s\n", file->ufname, strerror(errno));
 		}
 		else if ( !binaryFlag && file->altUfName[0])
 		{
-			file->altf = fopen(file->altUfName,"w");
+			file->altf = fopen(file->altUfName,"wb");
 			if ( !file->altf )
 			{
 				fclose(fp);
@@ -1265,7 +1281,7 @@ static time_t vms2unixsecs( unsigned char *text )
  * @return Pointer to null terminated ascii string containing unix time (sans \n)
  */
 
-static char *vms2unixtime( time_t vtime )
+static const char *vms2unixtime( time_t vtime )
 {
 	char *ans, *cp;
 	if ( !vtime )
@@ -1348,7 +1364,7 @@ void process_file ( unsigned char *buffer, int rsize )
 			break;
 		case FREC_FNAME:
 			clen = dsize;
-			if ( clen > sizeof(file.name)-1 )
+			if ( clen > INT_SIZEOF(file.name)-1 )
 				clen = sizeof(file.name)-1;
 			memcpy( file.name, data, clen );
 			file.name[ clen ] = 0;
@@ -1585,7 +1601,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 		printf( "\nHeader processing. rsize=%d\n", rsize );
 		cc = 2;
 		buff_cnt = 0;
-		while ( cc <= rsize-4 )
+		while ( cc <= (int)rsize-4 )
 		{
 			struct bsa *bsa;
 			int dsize, dtype;
@@ -1605,7 +1621,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				break;
 			case SUMM_SSNAME:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1613,7 +1629,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_CMDLINE:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1621,7 +1637,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_COMMENT:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1629,7 +1645,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_USER:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1665,7 +1681,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_OSVERSION:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1673,7 +1689,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_NODENAME:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1689,7 +1705,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_DEVICE:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1697,7 +1713,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				continue;
 			case SUMM_BCKVERSION:
 				clen = dsize;
-				if ( clen > sizeof(tbuff)-1 )
+				if ( clen > INT_SIZEOF(tbuff)-1 )
 					clen = sizeof(tbuff)-1;
 				memcpy( tbuff, text, clen );
 				tbuff[clen] = 0;
@@ -1889,7 +1905,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					continue;
 				}
 				file.file_state = GET_RCD_COUNT;
-//				Fall through to GET_RCD_COUNT
+/*				Fall through to GET_RCD_COUNT */
 			case GET_RCD_COUNT:
 				if ( file.altf )
 				{
@@ -2054,7 +2070,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 									file.vfc1,
 									preCode[0] );
 						}
-						if ( fwrite(preCode, 1, preNum, file.extf) != preNum ) /* write it */
+						if ( fwrite(preCode, 1, preNum, file.extf) != (unsigned int)preNum ) /* write it */
 						{
 #if HAVE_STRERROR
 							printf("snark: Failed to write (vfc header) %d byte(s) to '%s': %s\n", preNum, file.name, strerror(errno));
@@ -2099,7 +2115,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					}
 					if ( file.altf )
 					{
-						if ( fwrite(buffer+buffIndex, 1, tlen, file.altf ) != tlen )
+						if ( (int)fwrite(buffer+buffIndex, 1, tlen, file.altf ) != tlen )
 						{
 		#if HAVE_STRERROR
 							printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
@@ -2113,7 +2129,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 						}
 						file.altboundIndex += tlen;
 					}
-					if ( fwrite( buffer+buffIndex, 1, tlen, file.extf ) != tlen) /* write as much as we can at once */
+					if ( (int)fwrite( buffer+buffIndex, 1, tlen, file.extf ) != tlen) /* write as much as we can at once */
 					{
 #if HAVE_STRERROR
 						printf("snark: Failed to write (var/vfc record) %d bytes to '%s': %s\n", tlen, file.name, strerror(errno));
@@ -2186,7 +2202,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 								if ( (vflag & VERB_FILE_WRLVL) )
 									printf( "Writing %d byte%s of VFC tail. vfc1=0x%02X, postCode[0]=0x%02X\n",
 											postNum, postNum == 1 ? "":"s", file.vfc1, postCode[0] );
-								if ( fwrite(postCode, 1, postNum, file.extf) != postNum ) /* write trailing character(s) */
+								if ( (int)fwrite(postCode, 1, postNum, file.extf) != postNum ) /* write trailing character(s) */
 								{
 #if HAVE_STRERROR
 									printf("snark: Failed to write (vfc trailer) %d bytes to '%s': %s\n", postNum, file.name, strerror(errno));
@@ -2303,7 +2319,7 @@ static unsigned long get_block_number( unsigned char *bptr )
 		printf ( "Snark: Invalid header block size. Expected %d, found %d\n", sizeof( struct bbh ), bhsize );
 		return ans;
 	}
-	if ( bsize != 0 && bsize != blocksize )
+	if ( bsize != 0 && bsize != (unsigned long)blocksize )
 	{
 		printf ( "Snark: Invalid block size. Expected %d, found %ld\n", blocksize, bsize );
 		return ans;
@@ -2400,7 +2416,7 @@ void process_block ( unsigned char *blkptr )
 					 GETU32( record_header->brh_dol_l_flags ),
 					 GETU32( record_header->brh_dol_l_address ) );
 		}
-		if ( rsize+ii > bsize )	// This is an invalid record
+		if ( rsize+ii > bsize )	/* This is an invalid record */
 		{
 			printf( "Snark: rsize of %d is wrong. Cannot be more than %ld\n",
 					rsize, bsize-ii );
@@ -2487,7 +2503,10 @@ static int tape_marks;		/*!< running bit mask of tape marks read */
 static int read_record( unsigned char *buff, int len )
 {
 	unsigned char freclen[4], iFreclen[4];
-	int sts, reclen, Ireclen;
+	int sts, tmpLen, reclen, Ireclen;
+#if  1 || WIN32
+	int tmpRecCnt;
+#endif
 	if ( (tape_marks&3) == 3 )
 	{
 		if ( (vflag & VERB_DEBUG_LVL) )
@@ -2529,7 +2548,7 @@ static int read_record( unsigned char *buff, int len )
 	}
 	if ( reclen > len )
 	{
-		printf( "Snark: WARNING: Record of %d bytes too long for user %d user buffer.\n", reclen, len );
+		printf( "Snark: WARNING: Record of %d bytes too long for user %d buffer.\n", reclen, len );
 		sts = read( fd, buff, len );		/* give 'em what he wants */
 		lseek( fd, reclen-len, SEEK_CUR );	/* Skip remainder of record */
 		if ( (vflag & VERB_DEBUG_LVL) )
@@ -2538,9 +2557,36 @@ static int read_record( unsigned char *buff, int len )
 	}
 	if ( reclen < len )
 		len = reclen;				/* trim byte count to actual record length */
-	sts = read( fd, buff, len );
+#if 1 || WIN32
+	tmpRecCnt = 0;
+	tmpLen = 0;
+	while ( tmpLen < len )
+	{
+		sts = read(fd, buff+tmpLen, len-tmpLen);
+		if ( sts <= 0 )
+		{
+			tape_marks |= 1;			/* pretend we got a tape mark */
+			if ( (vflag & VERB_DEBUG_LVL) )
+				printf( "read_record: read(%d) returns %d due to error or EOF on attempt %d. tmpLen=%d\n", len-tmpLen, sts, tmpRecCnt, tmpLen );
+			return sts;
+		}
+		if ( (vflag & VERB_DEBUG_LVL) )
+			printf( "read_record: attempt %d, read(%d) returns %d.\n", tmpRecCnt, len-tmpLen, sts );
+		tmpLen += sts;
+		++tmpRecCnt;
+	}
+#else
+	tmpLen = read(fd, buff, len);
+	if ( tmpLen <= 0 )
+	{
+		tape_marks |= 1;			/* pretend we got a tape mark */
+		if ( (vflag & VERB_DEBUG_LVL) )
+			printf( "read_record: read() returns %d due to error or EOF.\n", sts );
+		return tmpLen;
+	}
 	if ( (vflag & VERB_DEBUG_LVL) )
-		printf( "read_record: returns %d.\n", sts );
+		printf( "read_record: read() returns %d.\n", tmpLen );
+#endif
 	if ( Iflag )
 	{
 		sts = read( fd, iFreclen, 4 );		/* Read the end of block record length from disk */
@@ -2556,9 +2602,9 @@ static int read_record( unsigned char *buff, int len )
 			printf( "Snark: read_record: SIMH format record count mismatch. Expected %d read %d\n",  reclen, Ireclen);
 			return -1;
 		}
-		sts = reclen;
 	}
-	if ( (vflag&VERB_BLOCK_LVL ) && !(vflag&VERB_DEBUG_LVL) )
+	sts = reclen;
+	if ( (vflag&VERB_DEBUG_U32) || ((vflag&VERB_BLOCK_LVL ) && !(vflag&VERB_DEBUG_LVL)) )
 		printf("read_record: block returned %d(0x%X)\n", sts, sts );
 	return sts;
 }
@@ -2898,7 +2944,7 @@ static int read_next_block( )
 				free_buff( bptr );				/* put this back */
 				return NXT_BLK_TM;				/* found tm */
 			}
-			if ( bptr->amt == blocksize )			/* block is ok so far */
+			if ( bptr->amt == blocksize )           /* block is ok so far */
 			{
 				numb0 = get_block_number( bptr->buffer );	/* get the block number of leading block */
 				if ( !numb0 )
@@ -3024,7 +3070,7 @@ static struct option long_options[] =
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.10, April 2024\n", progname );
+	printf ("%s version 3.11, April 2024\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>\n",
 			 progname );
 	if ( full )
@@ -3279,7 +3325,7 @@ int main ( int argc, char *argv[] )
 		perror("Failed to stat file");
 		return 1;
 	}
-	fd = open(tapefile, O_RDONLY);
+	fd = open(tapefile, OPEN_FLAGS);
 	if ( fd < 0 )
 	{
 		perror ( tapefile );
