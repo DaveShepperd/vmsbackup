@@ -164,6 +164,9 @@ History:
 **Versin 3.11 - April 2024 (DMS)**
   * Fixed MSYS2 and MinGW builds. Needed the O_BINARY flag.
 
+**Versin 3.12 - May 2024 (DMS)**
+	* Re-worked the method of exporting binary as a result of errors in VAR/VFC record structures.
+
 **Some original author details**
 ```
 Computer Centre

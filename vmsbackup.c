@@ -144,6 +144,10 @@
  *  	Fixed MSYS2 and MinGW builds. Needed the O_BINARY and
  *  	"b" flags.
  *
+ *  Versin 3.12 - May 2024 (DMS)
+ *  	Re-worked the method of exporting binary as a result of
+ *  	errors in VAR/VFC record structures.
+ *
  *  Installation:
  *
  *	Computer Centre
@@ -289,7 +293,8 @@ struct file_details
 	int vfcsize;					/* number of VFC bytes */
 	char name[MAX_FILENAME_LEN+4];	/* Name from tape image */
 	char ufname[MAX_FILENAME_LEN+MAX_FORMAT_LEN+4]; /* Name converted to Unix */
-	char altUfName[MAX_FILENAME_LEN+MAX_FORMAT_LEN+4]; /* Name converted to Unix */
+	char altUPfName[MAX_FILENAME_LEN+MAX_FORMAT_LEN+4]; /* Name converted to Unix */
+	char *altUfNameOnly;			/* Place in altUPfName of '.' character at head of alternate filename */
 	char *versionPtr;
 	unsigned short reclen;			/* length of most recent record read */
 	short fix;
@@ -299,6 +304,7 @@ struct file_details
 	int do_rat;
 	int do_binary;
 	int errorIndex;
+	int altErrorIndex;
 	int file_record_error;
 	int file_blk_error;
 	int file_size_error;
@@ -802,14 +808,23 @@ static int getRfmRatt(struct file_details *file, char *rcdFormat, int dstLen, ch
 		int type;
 		const char *name;
 	} RcdFmts[] = {
-		{ FAB_dol_C_RAW, "RAW" },
-		{ FAB_dol_C_FIX, "FIX" },
+#if 0
+		"UNDEF"    // 0
+	   ,"FIXED"    // 1
+	   ,"VAR"      // 2
+	   ,"VFC"      // 3
+	   ,"STMCRLF"  // 4
+	   ,"STMLF"	// 5
+	   ,"STMCR"	// 6
+#endif
+		{ FAB_dol_C_RAW, "UNDEF" },
+		{ FAB_dol_C_FIX, "FIXED" },
 		{ FAB_dol_C_VAR, "VAR" },
 		{ FAB_dol_C_VFC, "VFC" },
-		{ FAB_dol_C_STM, "STM" },
+		{ FAB_dol_C_STM, "STMCRLF" },
 		{ FAB_dol_C_STMLF, "STMLF" },
 		{ FAB_dol_C_STMCR, "STMCR" },
-		{ FAB_dol_C_FIX11, "FIX" }
+		{ FAB_dol_C_FIX11, "FIXED" }
 	};
 	static struct 
 	{
@@ -919,15 +934,16 @@ static FILE *openfile ( struct file_details *file )
 	if ( !dflag )
 	{
 		strcpy( ufn, q );	/* not keeping the directory structure so toss the path */
-		file->altUfName[0] = '.'; /* alternate file starts with a '.' */
-		strncpy(file->altUfName+1, q, sizeof(file->altUfName)-2);
+		file->altUPfName[0] = '.'; /* alternate file starts with a '.' */
+		strncpy(file->altUPfName+1, q, sizeof(file->altUPfName)-2);
 	}
 	else
 	{
 		int sLen = q-ufn;	/* Get length of path */
-		memcpy(file->altUfName, ufn, sLen); /* duplicate the path */
-		file->altUfName[sLen] = '.'; /* start alternate filename with a '.' */
-		strncpy(file->altUfName + sLen + 1, q, sizeof(file->altUfName)-sLen-2); /* copy rest of filename */
+		memcpy(file->altUPfName, ufn, sLen); /* duplicate the path */
+		file->altUPfName[sLen] = '.'; /* start alternate filename with a '.' */
+		file->altUfNameOnly = file->altUPfName+sLen;
+		strncpy(file->altUPfName + sLen + 1, q, sizeof(file->altUPfName)-sLen-2); /* copy rest of filename */
 	}
 	/* strip off the version number and possibly fix the filename's case */
 	while ( *q && *q != ';' )
@@ -940,10 +956,15 @@ static FILE *openfile ( struct file_details *file )
 	file->do_rat = 0;
 	if ( !binaryFlag )
 	{
+		const char *snarkMsg=NULL;
 		file->do_rat = (file->recatt & ((1 << FAB_dol_V_FTN) | (1 << FAB_dol_V_CR) | (1 << FAB_dol_V_PRN)));
-		if ( (file->recfmt & 0x1F) == FAB_dol_C_VAR && !file->do_rat )
+		if ( ((file->recfmt & 0x1F) == FAB_dol_C_FIX) || ((file->recfmt & 0x1F) == FAB_dol_C_FIX11) )
+			snarkMsg = "Snark: process_file(): File %s is FIXED. Setting it to binary\n";
+		if ( !snarkMsg && /* ((file->recfmt & 0x1F) == FAB_dol_C_VAR) && */ !file->do_rat )
+			snarkMsg = "Snark: process_file(): File %s has no record attibutes. Setting it to binary\n";
+		if ( snarkMsg )
 		{
-			printf( "Snark: process_file(): File %s is set to variable but without any record attibutes. Setting it to binary\n", file->ufname );
+			printf(snarkMsg, file->ufname);
 			file->savRecFmt = file->recfmt;
 			file->recfmt = FAB_dol_C_RAW;
 			file->do_binary = 1;
@@ -994,10 +1015,13 @@ static FILE *openfile ( struct file_details *file )
 		file->savRecFmt = file->recfmt;
 		file->recfmt = FAB_dol_C_RAW;
 		file->do_binary = 1;
-		file->altUfName[0] = 0;
+		file->altUPfName[0] = 0;
+		file->altUfNameOnly = NULL;
 	}
 	else
-		strncat(file->altUfName, rfm, sizeof(file->altUfName)-1);
+	{
+		strncat(file->altUPfName, rfm, sizeof(file->altUPfName) - 1);
+	}
 	if ( procf )
 	{
 		if ( dirfile )
@@ -1032,14 +1056,14 @@ static FILE *openfile ( struct file_details *file )
 		{
 			printf("Snark: Failed to open '%s' for output: %s\n", file->ufname, strerror(errno));
 		}
-		else if ( !binaryFlag && file->altUfName[0])
+		else if ( !binaryFlag && file->altUPfName[0])
 		{
-			file->altf = fopen(file->altUfName,"wb");
+			file->altf = fopen(file->altUPfName,"wb");
 			if ( !file->altf )
 			{
 				fclose(fp);
 				unlink(file->ufname);
-				printf("Snark: Failed to open '%s' for output: %s\n", file->altUfName, strerror(errno));
+				printf("Snark: Failed to open '%s' for output: %s\n", file->altUPfName, strerror(errno));
 				fp = NULL;
 			}
 		}
@@ -1173,41 +1197,52 @@ static void close_file( void )
 		{
 			fclose(file.altf);
 			file.altf = NULL;
-			utime(file.altUfName, &ut);
+			utime(file.altUPfName, &ut);
 		}
 		if ( (!binaryFlag && file.do_binary) || file.file_record_error || file.file_size_error || file.file_blk_error || file.file_format_error )
 		{
-			char rfm[MAX_FORMAT_LEN];
 			char refilename[MAX_FILENAME_LEN+MAX_FORMAT_LEN+32];
-			int rLen, rName=0;
+			int rLen, sLen, rName=0;
 
-			strncpy(refilename, file.ufname, sizeof(refilename)-1);
-			if ( file.altUfName[0] )
+			if ( file.altUPfName[0] )
 			{
-				getRfmRatt(&file, rfm, sizeof(rfm),cDelim);
-				strncat(refilename, rfm, sizeof(refilename)-1);
-			}
-			rLen = strlen(refilename);
-			if ( file.file_record_error )
-				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cmay_be_corrupt_at_%d", cDelim, file.errorIndex);
-			else if ( file.file_size_error )
-				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cwrong_size", cDelim);
-			else if ( file.file_blk_error )
-				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cfailed_blk_decode", cDelim);
-			else if ( file.file_format_error )
-				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cundefined_format", cDelim);
-			if ( strcmp(file.ufname, refilename) )
-				rName = 1;
-			if ( file.altUfName[0] )
-			{
-				/* We wrote a binary file with the altUfName */
-				unlink(file.ufname);	/* toss the molested file */
-				rename(file.altUfName, refilename);	/* and make the binary file the one we want */
+				int pLen = file.altUfNameOnly-file.altUPfName;	/* length of path */
+				int sLen = strlen(file.altUfNameOnly+1);
+				memcpy(refilename,file.altUPfName,pLen);		/* copy path only */
+				refilename[pLen] = 0;							/* terminate path */
+				memcpy(refilename + pLen, file.altUfNameOnly+1, sLen); /* copy name sans leading '.' */
+				refilename[pLen+sLen] = 0;						/* terminate filename */
 			}
 			else
 			{
-				/* The ordinary output is okay, so toss the binary version */
-				unlink(file.altUfName);
+				strncpy(refilename, file.ufname, sizeof(refilename) - 1);
+			}
+			sLen = rLen = strlen(refilename);
+			if ( file.file_record_error )
+			{
+				if ( file.altUPfName[0] )
+					rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cisCorruptAt%c%d", cDelim, cDelim, file.altErrorIndex);
+				else
+					rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cisCorruptAt%c%d", cDelim, cDelim, file.errorIndex);
+			}
+			else if ( file.file_size_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cwrongSize", cDelim);
+			else if ( file.file_blk_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cfailedBlkDecode", cDelim);
+			else if ( file.file_format_error )
+				rLen += snprintf(refilename + rLen, sizeof(refilename) - rLen, "%cundefinedFormat", cDelim);
+			rName = rLen != sLen;	/* Check to see if anything changed */
+			if ( file.altUPfName[0] )
+			{
+				/* We wrote a binary file with the altUfName */
+				unlink(file.ufname);	/* toss the normal output file */
+				rename(file.altUPfName, refilename); /* and make the binary file the one we want */
+				rName = 1;
+			}
+			else
+			{
+				if ( file.altUPfName[0] )
+					unlink(file.altUPfName); /* The ordinary output is okay, so toss the binary version */
 				/* if a rename is required, do it. */
 				if ( rName )
 					rename(file.ufname, refilename);
@@ -1227,8 +1262,8 @@ static void close_file( void )
 		}
 		else
 		{
-			if ( file.altUfName[0] )
-				unlink(file.altUfName);
+			if ( file.altUPfName[0] )
+				unlink(file.altUPfName);
 		}
 	}
 	memset( &file, 0, sizeof( file ) );
@@ -1534,7 +1569,7 @@ void process_file ( unsigned char *buffer, int rsize )
 		if ( tflag )
 		{
 			char rfm[MAX_FORMAT_LEN];
-			getRfmRatt(&file,rfm,sizeof(rfm), ':');
+			getRfmRatt(&file,rfm,sizeof(rfm), cDelim);
 			printf ( " %-35s %8d (%s)%s\n", file.name, file.size, rfm, file.size < 0 ? " (IGNORED!!!)" : "" );
 		}
 		if ( file.size < 0 )
@@ -1877,7 +1912,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					if ( fwrite(buffer + buffIndex, 1, file.reclen, file.altf) != file.reclen )
 					{
 	#if HAVE_STRERROR
-						printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+						printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUPfName, strerror(errno));
 	#else
 						perror("snark: Failed to write record");
 	#endif
@@ -1912,7 +1947,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					if ( fwrite(buffer+buffIndex, 1, 2, file.altf) != 2 )
 					{
 	#if HAVE_STRERROR
-						printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+						printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUPfName, strerror(errno));
 	#else
 						perror("snark: Failed to write record");
 	#endif
@@ -1921,6 +1956,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 						file.file_state = GET_IDLE;
 						return;
 					}
+					file.altboundIndex += 2;
 				}
 				file.reclen = getu16( (unsigned char *)buffer + buffIndex );
 				buffIndex += 2;
@@ -1986,6 +2022,8 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					{
 						file.errorIndex = file.inboundIndex-2;
 						++file.file_record_error;
+						if ( file.altf )
+							file.altErrorIndex = file.altboundIndex-2;
 					}
 /*					buffIndex -= 2;  */               /* backup over the record length */
 					continue;
@@ -1994,6 +2032,22 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 					continue;
 				break;
 			case GET_VFC:
+				if ( file.altf )
+				{
+					if ( fwrite(buffer+buffIndex, 1, 2, file.altf) != 2 )
+					{
+	#if HAVE_STRERROR
+						printf("snark: Failed to write (binary image) %d VFC bytes to '%s': %s\n", 2, file.altUPfName, strerror(errno));
+	#else
+						perror("snark: Failed to write record");
+	#endif
+						file.inboundIndex = file.size;
+						skipping |= SKIP_TO_FILE;
+						file.file_state = GET_IDLE;
+						return;
+					}
+					file.altboundIndex += 2;
+				}
 				file.vfc0 = buffer[buffIndex];
 				file.vfc1 = buffer[buffIndex+1];
 				/* vfcflag == 0, eat the vfc bytes and do normal text processing if appropriate.
@@ -2118,7 +2172,7 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 						if ( (int)fwrite(buffer+buffIndex, 1, tlen, file.altf ) != tlen )
 						{
 		#if HAVE_STRERROR
-							printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+							printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUPfName, strerror(errno));
 		#else
 							perror("snark: Failed to write record");
 		#endif
@@ -2229,17 +2283,14 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 				{
 					if ( (buffIndex & 1) )
 					{
-						++buffIndex;			/* round it up (all records are padded to even length) */
-						++file.rec_padding;		/* this doesn't get charged against file size */
-						++file.inboundIndex;	/* keep track of every byte found in input file */
 						if ( file.altf )
 						{
 							char chr[1];
-							chr[0] = 0;
+							chr[0] = buffer[buffIndex];
 							if ( fwrite(chr, 1, 1, file.altf ) != 1 )
 							{
 			#if HAVE_STRERROR
-								printf("snark: Failed to write (binary image) %d bytes to '%s': %s\n", 2, file.altUfName, strerror(errno));
+								printf("snark: Failed to write (binary image) %d byte filler to '%s': %s\n", 1, file.altUPfName, strerror(errno));
 			#else
 								perror("snark: Failed to write record");
 			#endif
@@ -2250,6 +2301,9 @@ void process_vbn ( unsigned char *buffer, unsigned short rsize )
 							}
 							file.altboundIndex += 1;
 						}
+						++buffIndex;			/* round it up (all records are padded to even length) */
+						++file.rec_padding;		/* this doesn't get charged against file size */
+						++file.inboundIndex;	/* keep track of every byte found in input file */
 					}
 					file.file_state = GET_RCD_COUNT;	/* expect record count next */
 				}
@@ -3070,7 +3124,7 @@ static struct option long_options[] =
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.11, April 2024\n", progname );
+	printf ("%s version 3.12, May 2024\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>\n",
 			 progname );
 	if ( full )
@@ -3128,7 +3182,7 @@ void usage ( const char *progname, int full )
 				"default) and ';format' will be one of ;VAR or ;VFC and ;size will be size of the longest record\n"
 				"found in the file.\n"
 				"\nNOTE 2: If an invalid length is discovered in a VAR or VFC record the file will be renamed\n"
-				"x.x[;version];format;size;att;may_be_corrupt_at_x where ;format will be one of ;VAR or ;VFC,\n"
+				"x.x[;version];format;size;att;isCorruptAt;x where ;format will be one of ;VAR or ;VFC,\n"
 				";size will be the length of the longest record, ;att will hold the attribute (CR, FTN, PRN, BLK)\n"
 				"and _x is the byte offset in the file where the invalid record can be found. It is expected\n"
 				"a custom program to be used to attempt to extract the records from the file as a separate step.\n"
