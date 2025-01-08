@@ -10,6 +10,10 @@
 #include	<utime.h>
 #include	<errno.h>
 
+#if !defined(O_BINARY)
+#define O_BINARY (0)	/* A Windows requirement */
+#endif
+
 /* File to dump the record lengths of a 'tape image file'
  * created with cp_tape.
  *
@@ -52,7 +56,7 @@ int main(int argc, char *argv[])
                 );
 		return 1;
 	}
-	fd = open(argv[optind], O_RDONLY);
+	fd = open(argv[optind], O_RDONLY|O_BINARY);
 	if ( fd < 0 )
 	{
 		perror("Unable to open input.\n");

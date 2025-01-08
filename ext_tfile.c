@@ -9,6 +9,10 @@
 #include	<time.h>
 #include	<utime.h>
 
+#if !defined(O_BINARY)
+#define O_BINARY (0)	/* A Windows requirement */
+#endif
+
 /* Extract a tape save set from a 'tape image file'
  * created with cp_tape.
  *
@@ -61,7 +65,7 @@ int main(int argc, char *argv[])
 			   );
 		return 1;
 	}
-	fd = open(argv[optind], O_RDONLY);
+	fd = open(argv[optind], O_RDONLY|O_BINARY);
 	if ( fd < 0 )
 	{
 		perror("Unable to open input.\n");
@@ -106,7 +110,7 @@ int main(int argc, char *argv[])
 	}
 	if ( found )
 	{
-		ofd = creat(outFname,0666);
+		ofd = open(outFname,O_CREAT|O_WRONLY|O_TRUNC|O_BINARY,0666);
 		if ( ofd < 0 )
 		{
 			perror("Failed to create output file");
