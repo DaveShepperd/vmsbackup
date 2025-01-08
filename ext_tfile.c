@@ -12,7 +12,7 @@
 /* Extract a tape save set from a 'tape image file'
  * created with cp_tape.
  *
- * Usage: dmp_tfile infilename
+ * Usage: ext_tfile [options] -o outfilename infilename
  *
  * As written, only works on a little endian machine.
  */
@@ -22,14 +22,14 @@ static unsigned char inpBuf[65536];
 int main(int argc, char *argv[])
 {
 	int cc, sts, fd= -1, ofd= -1, found=0;
-	int reclen, showHeaders=0;
+	int reclen, showHeaders=0, simhOut=0;
 	const char *ssName=NULL, *outFname=NULL;
 	char ascBuf[82];
 	             /*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
 	             /*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/
 	static const char volData[81] = "VOLEXTTFILE                                                                    3";
 	
-	while ( (cc = getopt(argc, argv, "hx:o:")) != EOF )
+	while ( (cc = getopt(argc, argv, "Ihx:o:")) != EOF )
 	{
 		switch (cc)
 		{
@@ -42,13 +42,23 @@ int main(int argc, char *argv[])
 		case 'o':
 			outFname = optarg;
 			break;
+		case 'I':
+			simhOut = 1;
+			break;
 		default:
 			printf("Unrecognised option: '%c'.\n", cc);
 		}
 	}
 	if ( optind >= argc || !ssName || !outFname )
 	{
-		printf("Usage: ext_tfile [-h] -x setName -o outFileName inpFilename\n");
+		printf("Usage: ext_tfile [-Ih] -x setName -o outFileName inpFilename\n");
+		printf("Where:\n"
+			   "-h = this message\n"
+			   "-I = write output in simh tape format (.tap file format)\n"
+			   "-x ssname = specify the saveset name\n"
+			   "-o outfile = output file name\n"
+			   "inpFilename = name of input file\n"
+			   );
 		return 1;
 	}
 	fd = open(argv[optind], O_RDONLY);
@@ -73,13 +83,19 @@ int main(int argc, char *argv[])
 			              /*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
 			              /*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/
 /*			static const char SampleHdr1[] = "HDR1EMPIRE.          RIVERA00010001000100 85100 00000 000000DECVMSBACKUP"; */
+			char *cp,tmpName[18];
 			sts = read(fd,ascBuf,reclen);
 			if ( sts != reclen )
 			{
 				perror("Error reading HDR record.");
 				break;
 			}
-			if ( !strncmp(ascBuf,"HDR1",4) && !strncmp(ascBuf+4,ssName,strlen(ssName)) )
+			memcpy(tmpName,ascBuf+4,17);
+			cp = tmpName;
+			while ( cp < tmpName+17 && *cp != ' ' )
+				++cp;
+			*cp = 0;
+			if ( !strncmp(ascBuf,"HDR1",4) && !strncmp(tmpName,ssName,17) )
 			{
 				found = 1;
 				break;
@@ -99,13 +115,18 @@ int main(int argc, char *argv[])
 		}
 		/* Write out a dummy VOL record */
 		reclen = 80;
-		write(ofd,&reclen,sizeof(reclen));
-		write(ofd,volData,80);
+		write(ofd,&reclen,sizeof(reclen));	/* Length */
+		write(ofd,volData,reclen);			/* data */
+		if ( simhOut )
+			write(ofd,&reclen,sizeof(reclen));	/* trailing length */
 		/* Write the HDR1 record */
-		write(ofd,&reclen,sizeof(reclen));
-		write(ofd,ascBuf,80);
+		write(ofd,&reclen,sizeof(reclen));	/* length */
+		write(ofd,ascBuf,reclen);			/* data */
+		if ( simhOut )
+			write(ofd,&reclen,sizeof(reclen));	/* trailing length */
 		while ( 1 )
 		{
+			int odd;
 			/* Read and write until we find an EOF2 record */
 			/* get record length */
 			sts = read(fd, &reclen, sizeof(reclen));
@@ -120,12 +141,12 @@ int main(int argc, char *argv[])
 			sts = write(ofd, &reclen, 4);
 			if ( sts != 4 )
 			{
-				perror("Error writing record");
+				perror("Error writing record length");
 				break;
 			}
 			if ( !reclen )
 			{
-				/* Copied a tape mark */
+				/* Wrote a tape mark */
 				continue;
 			}
 			/* read record */
@@ -136,13 +157,25 @@ int main(int argc, char *argv[])
 				break;
 			}
 			/* write record */
-			sts = write(ofd, inpBuf, reclen);
-			if ( sts != reclen )
+			odd = reclen&1;
+			if ( odd )
+				inpBuf[reclen] = 0;
+			sts = write(ofd, inpBuf, reclen + odd);
+			if ( sts != reclen+odd )
 			{
 				perror("Error writing data");
 				break;
 			}
-			if ( reclen == 80 && !strncmp((const char *)inpBuf,"EOF2",4) )
+			if ( simhOut )
+			{
+				sts = write(ofd, &reclen, 4);	/* write trailing length */
+				if ( sts != 4 )
+				{
+					perror("Error writing trailing record length");
+					break;
+				}
+			}
+			if ( reclen == 80 && !strncmp((const char *)inpBuf, "EOF2", 4) )
 			{
 				reclen = 0;
 				/* Write 3 consequitive tape marks */
