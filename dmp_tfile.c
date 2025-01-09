@@ -27,7 +27,8 @@ int main(int argc, char *argv[])
 	int cc, sts, fd;
 	int reclen, volCount=0, hdrCount=1, showHeaders = 1;
 	int simh = 0, interCount=0, interLen=0, verbose=0;
-
+	int lastWasTM;
+	
 	while ( (cc = getopt(argc, argv, "nsv")) != EOF )
 	{
 		switch (cc)
@@ -62,17 +63,34 @@ int main(int argc, char *argv[])
 		perror("Unable to open input.\n");
 		return 2;
 	}
+	lastWasTM = 0;
 	while ( 1 )
 	{
+		int savErr;
+		reclen = 0;
 		sts = read(fd, &reclen, sizeof(reclen));
+		savErr = errno;
 		if ( !sts )
 			break;
 		if ( sts < 0 )
 		{
+			fprintf(stderr,"Error reading record count bytes. %s\n", strerror(errno));
+			close(fd);
+			return 1;
+		}
+		if ( sts != sizeof(reclen) )
+		{
 			fprintf(stderr,"Error reading record count bytes. Expected %d, got %d: %s\n", sizeof(reclen), sts, strerror(errno));
+			close(fd);
+			return 1;
+		}
+		if ( reclen == -1 )
+		{
+			if ( showHeaders )
+				printf("Found EOF record\n");
 			break;
 		}
-		if ( reclen > 65535 )
+		if ( reclen < 0 || reclen > 65535 )
 		{
 			fprintf(stderr,"Fatal error decoding file. Record count of 0x%X is > 0xFFFF which is illegal. Corrupt? (sizeof(int)=%d)\n",
 					reclen, sizeof(reclen));
@@ -90,8 +108,10 @@ int main(int argc, char *argv[])
 			if ( reclen == 0 )
 			{
 				printf("%s\tTape mark.\n", volCount?"\t":"");
+				++lastWasTM;
 				continue;
 			}
+			lastWasTM = 0;
 			if ( reclen == 80 )
 			{
 				char *cp, ascBuf[82];
@@ -128,14 +148,24 @@ int main(int argc, char *argv[])
 				int odd = reclen&1;
 				lseek(fd, reclen+odd, SEEK_CUR);
 			}
-            if ( simh )
+            if ( simh && !lastWasTM )
             {
 				int lastRecLen;
+				lastRecLen = 0;
 		        sts = read(fd, &lastRecLen, sizeof(lastRecLen));
-		        if ( sts != sizeof(reclen) )
+				savErr = errno;
+		        if ( sts != sizeof(lastRecLen) )
 		        {
-			        fprintf(stderr,"Error reading trailing record count bytes. Expected %d bytes, got %d: %s\n",
-							sizeof(reclen), sts, strerror(errno));
+					if ( sts < 0 )
+					{
+						fprintf(stderr, "Error reading trailing record count bytes: (%d)%s\n",
+								savErr, strerror(savErr));
+					}
+					else if ( sts > 0 )
+					{
+						fprintf(stderr, "Error reading trailing record count bytes. Expected %d bytes, got %d: (%d)%s\n",
+								sizeof(lastRecLen), sts, savErr, strerror(errno));
+					}
 			        break;
 		        }
 				if ( lastRecLen != reclen )
@@ -153,15 +183,28 @@ int main(int argc, char *argv[])
 		if ( reclen == 0 )
 		{
 			printf("Tape mark.\n");
+			++lastWasTM;
 		}
-		else
+		else if ( reclen > 0 )
 		{
 			printf("Record of %6d bytes.\n", reclen);
 			if ( reclen && simh )
 				reclen += 4;
 			lseek(fd, reclen, SEEK_CUR);
 		}
+		else
+		{
+			if ( savErr != EOF )
+			{
+				fflush(stdout);
+				fprintf(stderr,"Error reading input (sts=%d, reclen=%d): (%d)%s\n",
+						sts, reclen, savErr, strerror(savErr));
+			}
+			break;
+		}
 	}
+	if ( showHeaders )
+		printf("lastWasTM=%d\n", lastWasTM);
 	close(fd);
 	return 0;
 }
