@@ -1,198 +1,487 @@
-#include	<stdio.h>
-#include	<unistd.h>
-#include	<fcntl.h>
-#include	<ctype.h>
-#include	<string.h>
-#include	<stdlib.h>
-#include	<unistd.h>
-#include	<getopt.h>
-#include	<time.h>
-#include	<utime.h>
+/* ext_tfile.c - extract a saveset from a .data file */
 
-#if !defined(O_BINARY)
-#define O_BINARY (0)	/* A Windows requirement */
-#endif
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <getopt.h>
 
-/* Extract a tape save set from a 'tape image file'
- * created with cp_tape.
- *
- * Usage: ext_tfile [options] -o outfilename infilename
- *
- * As written, only works on a little endian machine.
- */
+static int verbose;
+static int simhMode;
+static char buff[65536];
+#define MAX_SSNAME_LEN (17)
+static char ssname[MAX_SSNAME_LEN+1];
+static int ssnamelen;
+/*                           00000000001111111111222222222233333333334444444444555555555566666666667777777777 */
+/*                           01234567890123456789012345678901234567890123456789012345678901234567890123456789 */
+static char vol_label[81];
+static char hdr1[81], hdr2[81];
 
-static unsigned char inpBuf[65536];
-
-int main(int argc, char *argv[])
+static void help_em( FILE *opf, const char *title )
 {
-	int cc, sts, fd= -1, ofd= -1, found=0;
-	int reclen, showHeaders=0, simhOut=0;
-	const char *ssName=NULL, *outFname=NULL;
-	char ascBuf[82];
-	             /*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
-	             /*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/
-	static const char volData[81] = "VOLEXTTFILE                                                                    3";
+	fprintf(opf, "Usage: %s [-sv] ss_name datafile\n"
+			"Extracts saveset 'ss_name' from 'datafile' into <ssname>[.data|.simh]\n"
+			"Where:\n"
+			"-s       means make output simh format\n"
+			"-v       set verbose\n"
+			"ss_name  is the saveset name to extract\n"
+			"input    filename of .data file\n"
+			,title);
+}
+
+static int last_reclen= -1, reccnt=0;
+
+static int write_rcd( FILE *outp, char *bufp, int bc, const char *msg )
+{
+    int retv, outv;
+
+    if ( verbose )
+    {
+        if ( bc == 0 || bc == 80 || bc != last_reclen )
+        {
+            if ( reccnt )
+            {
+                printf( "Info: Wrote %5d records of %5d bytes.\n", reccnt, last_reclen );
+            }
+            if ( !bc )
+                printf( "Info: Wrote %s\n", msg ? msg : "tape mark" );
+            if ( bc == 80 )
+            {
+                char tb[22];
+                memcpy(tb,bufp,21);
+                tb[21] = 0;
+                printf( "Info: Wrote 80 byte record: '%s'\n", tb );
+            }
+            last_reclen = bc;
+            reccnt = 0;
+        }
+        else
+        {
+            ++reccnt;
+        }
+    }
+    retv = fwrite( &bc, 1, sizeof(bc), outp );
+    if ( retv != (int)sizeof(bc) )
+    {
+        printf( "Error: Unable to write leading byte count. Wrote %d. Err=%s\n",
+            retv, strerror(errno) );
+        return -1;
+    }
+    if ( (outv=bc) )
+    {
+        if ( (bc&1) )
+            ++outv;
+        retv = fwrite( bufp, 1, outv, outp );
+        if ( outv != retv )
+        {
+            printf( "Error: Unable to write %d byte record. Wrote %d. Err=%s\n",
+                outv, retv, strerror(errno) );
+            return -1;
+        }
+        if ( simhMode )
+        {
+            if ( (retv=fwrite( &bc, 1, sizeof(bc), outp)) != (int)sizeof(bc) )
+            {
+                printf( "Error: Unable to write trailing byte count. Wrote %d. Err=%s\n",
+                    retv, strerror(errno) );
+                return -1;
+            }
+        }
+    }
+    return bc;
+}
+
+static int write_ss( FILE *inp )
+{
+    FILE *outp;
+    int outv, retv, bc, tmhist, wtmhist, state = 0, expectbc=0;
+    int badcnt=0, badsize=0, skip;
+    char ofname[sizeof(ssname)+8];
+
+    snprintf(ofname, sizeof(ofname), "%s%s", ssname, simhMode ? ".simh" : ".data" );
+    outp = fopen(ofname,"wb");
+    if (!outp)
+    {
+        fprintf(stderr, "Error: Unable to open output '%s': %s\n",
+            ofname, strerror(errno) );
+        return -1;
+    }
+    if ( verbose )
+    {
+        printf( "Info: Opened '%s' for output...\n", ofname );
+    }
+    /* Write the VOL1 header */
+    if ( write_rcd( outp, vol_label,80, "VOL1 header" ) != 80 )
+        return -1;
+    /* Write the HDR1 header */
+    if ( write_rcd( outp, buff, 80, "HDR1 header" ) != 80 )
+        return -1;
+    memcpy(hdr1, buff, 80); /* Save a copy of our HDR1 record */
+    wtmhist = tmhist = 0;             /* Clear TM history */
+    while ( (retv=fread( &bc, 1, sizeof(bc), inp)) == (int)sizeof(bc) )
+    {
+/*        printf( "Record of %d bytes\n", bc ); */
+        if ( bc > 65535 )
+        {
+            printf( "Warn: Record size %d too big. Probably out of sync\n", bc );
+            continue;
+        }
+        skip = 0;       /* assume not to skip */
+        if ( bc )
+        {
+            retv = fread( buff, 1, bc, inp );
+            if ( retv != bc )
+            {
+                printf( "Error: Unable to read input. Found %d bytes, expected %d\n",
+                    retv, bc );
+                return -1;
+            }
+        }
+        switch (state ) {
+        case 0:
+            if ( bc != 80 || strncmp(buff,"HDR2",4) )
+            {
+                printf( "Warn: No HDR2 record found after HDR1\n" );
+            }
+            else
+            {
+                int ii;
+                memcpy(hdr2,buff,80);   /* Save a copy of our HDR2 record */
+                ii = sscanf(buff+5,"%5d",&expectbc );
+                if ( ii != 1 )
+                {
+                    char tchr[16];
+                    memcpy(tchr, buff, 15);
+                    tchr[15] = 0;
+                    printf( "Warn: Error decoding byte count in '%s'. Found %d\n",
+                        tchr, expectbc );
+                }
+            }
+            ++state;
+            break;
+        case 1:
+            if ( bc )
+            {
+                printf( "Warn: No tape mark found after HDR2 record\n" );
+            }
+            ++state;
+            break;
+        case 2:
+            if ( !bc )
+            {
+                ++state;
+                skip = 1;
+                break;
+            }
+            if ( bc != expectbc )
+            {
+                if ( verbose && badcnt )
+                {
+                    if ( badsize != bc )
+                    {
+                        printf( "Info: Skipped %d records of size %d. Expected size %d\n",
+                            badcnt, badsize, expectbc );
+                        badcnt = 0;
+                        badsize = bc;
+                    }
+                }
+                ++badcnt;
+                skip = 1;
+                break;
+            }
+            if ( verbose && badcnt )
+            {
+                printf( "Info: Skipped %d records of %d bytes.\n", badcnt, badsize );
+                badcnt = 0;
+                badsize = 0;
+            }
+            break;
+        case 3:
+            if ( verbose && badcnt )
+            {
+                printf( "Info: Skipped %d records of %d bytes.\n", badcnt, badsize );
+                badcnt = 0;
+                badsize = 0;
+            }
+            if ( bc != 80 || strncmp(buff,"EOF1",4) )
+            {
+                printf( "Warn: Didn't find an EOF1 record after tape mark at end of data block.\n" );
+                --state;
+#if 0
+                if ( bc == 100 )
+                {
+                    printf(   "Bad 100 byte record:" );
+                    for (bc = 0; bc < 23; ++bc )
+                    {
+                        printf( " %02X", buff[bc] );
+                    }
+                    /*         Bad 100 byte record: */
+                    printf( "\n                   " ); 
+                    for (bc = 0; bc < 23; ++bc )
+                    {
+                        printf( "  %c", isprint(buff[bc]) ? buff[bc] : '.' );
+                    }
+                    printf( "\n" );
+                    bc = 100;
+                }
+#endif
+                if ( bc != expectbc )
+                {
+                    badsize = bc;
+                    badcnt = 1;
+                    skip = 1;
+                }
+                break;
+            }
+            ++state;
+            break;
+        default:
+            skip = 1;
+            break;
+        }
+        if ( bc == 80 )
+        {
+            if ( verbose && badcnt )
+            {
+                printf( "Info: Skipped %d records of %d bytes.\n", badcnt, badsize );
+                badcnt = 0;
+                badsize = 0;
+            }
+            /* Look for a VOL1, HDR1 or EOF1 record */
+            if ( !strncmp(buff,"EOF1",4) )
+            {
+                if ( strncmp(buff+4,hdr1+4,14) )
+                {
+                    char hbuf[24], ebuf[24];
+                    strncpy(ebuf,buff,23);
+                    strncpy(hbuf,hdr1,23);
+                    ebuf[23] = 0;
+                    hbuf[23] = 0;
+                    printf( "Warn: EOF1 record doesn't match HDR1 record:\n    %s\n    %s\n",
+                        hbuf, ebuf );
+                }
+                break;
+            }
+            if ( !strncmp(buff,"VOL1",4) || !strncmp(buff,"HDR1",4) )
+            {
+                if ( verbose )
+                {
+                    char tbuf[24];
+                    strncpy(tbuf,buff,23);
+                    tbuf[23] = 0;
+                    printf( "Warn: Premature end found with: %s\n", tbuf );
+                }
+                break;
+            }
+        }
+        if ( !skip )
+        {
+            if ( write_rcd(outp, buff, bc, NULL) < 0 )
+            {
+                return -1;
+            }
+            if ( !bc )
+            {
+                wtmhist = (wtmhist<<1) | 1;
+            }
+        }
+        if ( !bc )
+        {
+            tmhist = (tmhist<<1) | 1;
+        }
+    }
+    if ( ferror(inp) )
+    {
+        printf( "Error: Error reading input. Expected %d bytes, got %d. Err=%s",
+            sizeof(bc), retv, strerror(errno) );
+        return -1;
+    }
+    if ( (wtmhist&3) != 3 )      /* Preceeded by two TM's? */
+    {
+        if ( write_rcd(outp,NULL,0, (tmhist&3) != 3 ? "missing tape mark" : "tape mark") != 0 ) /* Nope, write one */
+            return -1;
+        tmhist |= (tmhist<<1)|1;
+        wtmhist |= (tmhist<<1)|1;
+        if ( (wtmhist&3) != 3 )  /* Did that give us two TM's? */
+        {
+            if ( write_rcd(outp,NULL,0, (tmhist&3) != 3 ? "missing tape mark" : "tape mark") != 0 )  /* Nope, write another one */
+                return -1;
+        }
+    }
+    memcpy(hdr1,"EOF1",4);
+    if ( write_rcd(outp,hdr1,80, "EOF1 header") != 80 )
+    {
+        return -1;
+    }
+    if ( !hdr2[0] )
+    {
+        printf("Warn: Didn't find a HDR2 record. VMS's backup may fail its tape label processing.\n" );
+    }
+    else
+    {
+        memcpy(hdr2,"EOF2",4);
+        if ( write_rcd(outp,hdr2,80,"EOF2 header") != 80 )
+        {
+            return -1;
+        }
+    }
+    for ( bc=0; bc < 3; ++bc )
+    {
+        if ( write_rcd(outp, NULL, 0, "trailing tape mark") != 0 )
+            return -1;
+    }
+    if ( simhMode )
+    {
+        bc = -1;
+        outv = fwrite( &bc, 1, sizeof(bc), outp );
+        if ( outv != (int)sizeof(bc) )
+        {
+            printf( "Error: Error writing %d byte end of media header. Wrote %d. Err=%s\n",
+                sizeof(bc), outv, strerror(errno) );
+            return -1;
+        }
+    }
+	return 0;
+}
+
+int main( int argc, char *argv[] )
+{
+	FILE *inp;
+	static int bc;
+	int opt, retv;
+    char *cp, lssname[18];
+	const char *title = argv[0];
 	
-	while ( (cc = getopt(argc, argv, "Ihx:o:")) != EOF )
+#if 0
+	--argc;
+	++argv;
+    while ( argc )
+    {
+        cp = argv[0];
+        if ( *cp++ != '-' )
+            break;
+        if ( *cp == 'v' )
+        {
+            verbose = 1;
+            --argc;
+            ++argv;
+            continue;
+        }
+        if ( *cp == 's' )
+        {
+            simhMode = 1;
+            --argc;
+            ++argv;
+            continue;
+        }
+        help_em();
+        return 1;
+    }
+#else
+	while ( (opt = getopt(argc, argv, "sv")) != -1 )
 	{
-		switch (cc)
+		switch (opt)
 		{
-		case 'h':
-			++showHeaders;
+		case 's':
+			simhMode = 1;
 			break;
-		case 'x':
-			ssName = optarg;
+		case 'v':
+			verbose = 1;
 			break;
-		case 'o':
-			outFname = optarg;
-			break;
-		case 'I':
-			simhOut = 1;
-			break;
-		default:
-			printf("Unrecognised option: '%c'.\n", cc);
-		}
-	}
-	if ( optind >= argc || !ssName || !outFname )
-	{
-		printf("Usage: ext_tfile [-Ih] -x setName -o outFileName inpFilename\n");
-		printf("Where:\n"
-			   "-h = this message\n"
-			   "-I = write output in simh tape format (.tap file format)\n"
-			   "-x ssname = specify the saveset name\n"
-			   "-o outfile = output file name\n"
-			   "inpFilename = name of input file\n"
-			   );
-		return 1;
-	}
-	fd = open(argv[optind], O_RDONLY|O_BINARY);
-	if ( fd < 0 )
-	{
-		perror("Unable to open input.\n");
-		return 2;
-	}
-	while ( 1 )
-	{
-		/* First search for HDR1 records. Ignoring tape marks */
-		sts = read(fd, &reclen, sizeof(reclen));
-		if ( !sts )
-			break;
-		if ( sts < 0 )
-		{
-			perror("Error reading input.");
-			break;
-		}
-		if ( reclen == 80 )
-		{
-			              /*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
-			              /*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/
-/*			static const char SampleHdr1[] = "HDR1EMPIRE.          RIVERA00010001000100 85100 00000 000000DECVMSBACKUP"; */
-			char *cp,tmpName[18];
-			sts = read(fd,ascBuf,reclen);
-			if ( sts != reclen )
-			{
-				perror("Error reading HDR record.");
-				break;
-			}
-			memcpy(tmpName,ascBuf+4,17);
-			cp = tmpName;
-			while ( cp < tmpName+17 && *cp != ' ' )
-				++cp;
-			*cp = 0;
-			if ( !strncmp(ascBuf,"HDR1",4) && !strncmp(tmpName,ssName,17) )
-			{
-				found = 1;
-				break;
-			}
-			continue;
-		}
-		lseek(fd, reclen, SEEK_CUR);
-	}
-	if ( found )
-	{
-		ofd = open(outFname,O_CREAT|O_WRONLY|O_TRUNC|O_BINARY,0666);
-		if ( ofd < 0 )
-		{
-			perror("Failed to create output file");
-			close(fd);
+		default: /* '?' */
+			help_em(stderr,title);
 			return 1;
 		}
-		/* Write out a dummy VOL record */
-		reclen = 80;
-		write(ofd,&reclen,sizeof(reclen));	/* Length */
-		write(ofd,volData,reclen);			/* data */
-		if ( simhOut )
-			write(ofd,&reclen,sizeof(reclen));	/* trailing length */
-		/* Write the HDR1 record */
-		write(ofd,&reclen,sizeof(reclen));	/* length */
-		write(ofd,ascBuf,reclen);			/* data */
-		if ( simhOut )
-			write(ofd,&reclen,sizeof(reclen));	/* trailing length */
-		while ( 1 )
-		{
-			int odd;
-			/* Read and write until we find an EOF2 record */
-			/* get record length */
-			sts = read(fd, &reclen, sizeof(reclen));
-			if ( !sts )
-				break;
-			if ( sts < 0 )
-			{
-				perror("Error reading input.");
-				break;
-			}
-			/* write record length */
-			sts = write(ofd, &reclen, 4);
-			if ( sts != 4 )
-			{
-				perror("Error writing record length");
-				break;
-			}
-			if ( !reclen )
-			{
-				/* Wrote a tape mark */
-				continue;
-			}
-			/* read record */
-			sts = read(fd, inpBuf, reclen);
-			if ( sts != reclen )
-			{
-				perror("Error reading data");
-				break;
-			}
-			/* write record */
-			odd = reclen&1;
-			if ( odd )
-				inpBuf[reclen] = 0;
-			sts = write(ofd, inpBuf, reclen + odd);
-			if ( sts != reclen+odd )
-			{
-				perror("Error writing data");
-				break;
-			}
-			if ( simhOut )
-			{
-				sts = write(ofd, &reclen, 4);	/* write trailing length */
-				if ( sts != 4 )
-				{
-					perror("Error writing trailing record length");
-					break;
-				}
-			}
-			if ( reclen == 80 && !strncmp((const char *)inpBuf, "EOF2", 4) )
-			{
-				reclen = 0;
-				/* Write 3 consequitive tape marks */
-				sts = write(ofd, &reclen, 4);
-				sts = write(ofd, &reclen, 4);
-				sts = write(ofd, &reclen, 4);
-				break;
-			}
-		}
 	}
-	if ( ofd >= 0 )
-		close(ofd);
-	if ( fd >= 0 )
-		close(fd);
+#endif
+    if ( argc-optind < 2 )
+	{
+        help_em(stdout,title);
+        return 1;
+	}
+    strncpy( ssname, argv[optind], sizeof(ssname)-1 );
+    cp = strrchr( ssname, ' ' );
+    if ( cp )
+    {
+        *cp = 0;
+    }
+    ssnamelen = strlen(ssname);
+	memset(lssname,' ', sizeof(lssname)-1 );
+	lssname[sizeof(lssname)-1] = 0;
+    memcpy(lssname,ssname,ssnamelen);
+	inp = fopen( argv[optind+1], "rb" );
+	if ( !inp )
+	{
+		perror( "Error opening input" );
+		return 2;
+	}
+    if ( verbose )
+    {
+        printf( "Info: Looking for a saveset named '%s'\n", ssname );
+    }
+	while ( (retv=fread( &bc, 1, sizeof(bc), inp)) == (int)sizeof(bc) )
+	{
+/*        printf( "Record of %d bytes\n", bc ); */
+        if ( bc > 65535 )
+        {
+            printf( "Warn: Record size %d too big. Probably out of sync\n", bc );
+            return 9;
+        }
+        if ( bc )
+        {
+            retv = fread( buff, 1, bc, inp );
+            if ( retv != bc )
+            {
+                printf( "Error: Error reading input. Found %d bytes, expected %d\n",
+                    retv, bc );
+                return 5;
+            }
+        }
+        if ( bc == 80 )
+        {
+            if ( !vol_label[0] && !strncmp(buff,"VOL1",4) )
+            {
+                strncpy(vol_label,buff,80);
+                retv = ssnamelen;
+                cp = strchr(ssname, '.');
+                if ( cp )
+                {
+                    retv = cp - ssname;
+                }
+                strncpy(vol_label+4,ssname,retv);
+                vol_label[4+retv] = ' ';
+                if ( verbose )
+                {
+                    printf( "Info: Found '%s'\n", vol_label );
+                }
+            }
+			/*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
+			/*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/
+/*                             "HDR1121589.SUTTLESDELxxx   00010081000100 89349 00000 000000DECVMSBACKUP" */
+            if ( !strncmp(buff,"HDR1",4) )
+            {
+				if ( !strncmp(buff+4, lssname, MAX_SSNAME_LEN) )
+                {
+                    if ( !vol_label[0] )
+                    {
+                        printf( "Error: No VOL1 label found before HDR1%s\n", ssname );
+                        return 1;
+                    }
+                    write_ss(inp);
+                    fclose(inp);
+                    return 0;
+                }
+            }
+        }
+	}
+	if ( !feof(inp) )
+	{
+		printf( "Error: Unable to read input. Expected %d bytes, got %d. Err=%s",
+            sizeof(bc), retv, strerror(errno) );
+		return 8;
+	}
+    printf("Error: Didn't find saveset named '%s'\n", ssname );
+	fclose(inp);
 	return 0;
 }

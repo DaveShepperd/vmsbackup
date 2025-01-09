@@ -28,14 +28,14 @@ int main(int argc, char *argv[])
 	int reclen, volCount=0, hdrCount=1, showHeaders = 1;
 	int simh = 0, interCount=0, interLen=0, verbose=0;
 
-	while ( (cc = getopt(argc, argv, "nIv")) != EOF )
+	while ( (cc = getopt(argc, argv, "nsv")) != EOF )
 	{
 		switch (cc)
 		{
 		case 'n':
 			showHeaders = 0;
 			break;
-        case 'I':
+        case 's':
             simh = 1;
             break;
 		case 'v':
@@ -48,10 +48,10 @@ int main(int argc, char *argv[])
 	}
 	if ( optind >= argc )
 	{
-		printf("Usage: dmp_tfile [-nIv] filename.\n"
+		printf("Usage: dmp_tfile [-nsv] filename.\n"
                 "Where:\n"
                 "-n  - Don't show just headers. Default is show everything.\n"
-                "-I  - file is SIMH format\n"
+                "-s  - file is SIMH format\n"
 			    "-v  - verbose mode\n"
                 );
 		return 1;
