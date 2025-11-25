@@ -22,11 +22,12 @@ static void help_em( FILE *opf, const char *title )
 {
 	fprintf(opf, "Usage: %s [-sv] ss_name datafile\n"
 			"Extracts saveset 'ss_name' from 'datafile' into <ssname>[.data|.simh]\n"
+			"or if ss_name is a number 1<=num<=99, extracts num HDR1's entry in 'datafile' into <num>_<name>[.data|.simh]\n"
 			"Where:\n"
-			"-s       means make output simh format\n"
+			"-s       means make output simh format (selects output file extension as .simh)\n"
 			"-v       set verbose\n"
-			"ss_name  is the saveset name to extract\n"
-			"input    filename of .data file\n"
+			"ss_name  is the saveset name to extract or a number between 1 and 99\n"
+			"datafile filename of .data file\n"
 			,title);
 }
 
@@ -92,14 +93,23 @@ static int write_rcd( FILE *outp, char *bufp, int bc, const char *msg )
     return bc;
 }
 
-static int write_ss( FILE *inp )
+static int write_ss( FILE *inp, int hdrIndx )
 {
     FILE *outp;
     int outv, retv, bc, tmhist, wtmhist, state = 0, expectbc=0;
     int badcnt=0, badsize=0, skip;
-    char ofname[sizeof(ssname)+8];
+    char ofname[sizeof(ssname)+8+4];
 
-    snprintf(ofname, sizeof(ofname), "%s%s", ssname, simhMode ? ".simh" : ".data" );
+	skip = strlen(ssname);
+	if ( skip && ssname[skip-1] == '.' )
+	{
+		--skip;
+		ssname[skip] = 0;
+	}
+	if ( !hdrIndx )
+		snprintf(ofname, sizeof(ofname), "%s%s", ssname, simhMode ? ".simh" : ".data");
+	else
+		snprintf(ofname, sizeof(ofname), "%02d_%s%s", hdrIndx, ssname, simhMode ? ".simh" : ".data");
     outp = fopen(ofname,"wb");
     if (!outp)
     {
@@ -208,24 +218,6 @@ static int write_ss( FILE *inp )
             {
                 printf( "Warn: Didn't find an EOF1 record after tape mark at end of data block.\n" );
                 --state;
-#if 0
-                if ( bc == 100 )
-                {
-                    printf(   "Bad 100 byte record:" );
-                    for (bc = 0; bc < 23; ++bc )
-                    {
-                        printf( " %02X", buff[bc] );
-                    }
-                    /*         Bad 100 byte record: */
-                    printf( "\n                   " ); 
-                    for (bc = 0; bc < 23; ++bc )
-                    {
-                        printf( "  %c", isprint(buff[bc]) ? buff[bc] : '.' );
-                    }
-                    printf( "\n" );
-                    bc = 100;
-                }
-#endif
                 if ( bc != expectbc )
                 {
                     badsize = bc;
@@ -349,36 +341,10 @@ int main( int argc, char *argv[] )
 {
 	FILE *inp;
 	static int bc;
-	int opt, retv;
+	int opt, retv, hdr1Count, hdrIndx=0;
     char *cp, lssname[18];
-	const char *title = argv[0];
+	const char *title = argv[0], *dataFileName;
 	
-#if 0
-	--argc;
-	++argv;
-    while ( argc )
-    {
-        cp = argv[0];
-        if ( *cp++ != '-' )
-            break;
-        if ( *cp == 'v' )
-        {
-            verbose = 1;
-            --argc;
-            ++argv;
-            continue;
-        }
-        if ( *cp == 's' )
-        {
-            simhMode = 1;
-            --argc;
-            ++argv;
-            continue;
-        }
-        help_em();
-        return 1;
-    }
-#else
 	while ( (opt = getopt(argc, argv, "sv")) != -1 )
 	{
 		switch (opt)
@@ -394,32 +360,43 @@ int main( int argc, char *argv[] )
 			return 1;
 		}
 	}
-#endif
-    if ( argc-optind < 2 )
+    if ( argc-optind < (hdrIndx ? 1 : 2) )
 	{
         help_em(stdout,title);
         return 1;
 	}
-    strncpy( ssname, argv[optind], sizeof(ssname)-1 );
-    cp = strrchr( ssname, ' ' );
-    if ( cp )
-    {
-        *cp = 0;
-    }
-    ssnamelen = strlen(ssname);
-	memset(lssname,' ', sizeof(lssname)-1 );
-	lssname[sizeof(lssname)-1] = 0;
-    memcpy(lssname,ssname,ssnamelen);
-	inp = fopen( argv[optind+1], "rb" );
+	strncpy(ssname, argv[optind], sizeof(ssname) - 1);
+	dataFileName = argv[optind+1];
+	cp = NULL;
+	hdrIndx = strtol(ssname,&cp,0);
+	if ( !cp || *cp || hdrIndx < 1 || hdrIndx >= 100 )
+	{
+		cp = strrchr( ssname, ' ' );
+		if ( cp )
+		{
+			*cp = 0;
+		}
+		ssnamelen = strlen(ssname);
+		memset(lssname,' ', sizeof(lssname)-1 );
+		lssname[sizeof(lssname)-1] = 0;
+		memcpy(lssname,ssname,ssnamelen);
+		dataFileName = argv[optind+1];
+		hdrIndx = 0;
+	}
+	inp = fopen( dataFileName, "rb" );
 	if ( !inp )
 	{
-		perror( "Error opening input" );
+		perror( "Error opening datafile" );
 		return 2;
 	}
     if ( verbose )
     {
-        printf( "Info: Looking for a saveset named '%s'\n", ssname );
+		if ( !hdrIndx )
+			printf("Info: Looking for a saveset named '%s'\n", ssname);
+		else 
+			printf("Info: Looking for the saveset at HDR1 index %d\n", hdrIndx);
     }
+	hdr1Count = 0;
 	while ( (retv=fread( &bc, 1, sizeof(bc), inp)) == (int)sizeof(bc) )
 	{
 /*        printf( "Record of %d bytes\n", bc ); */
@@ -443,35 +420,73 @@ int main( int argc, char *argv[] )
             if ( !vol_label[0] && !strncmp(buff,"VOL1",4) )
             {
                 strncpy(vol_label,buff,80);
-                retv = ssnamelen;
-                cp = strchr(ssname, '.');
-                if ( cp )
-                {
-                    retv = cp - ssname;
-                }
-                strncpy(vol_label+4,ssname,retv);
-                vol_label[4+retv] = ' ';
-                if ( verbose )
-                {
-                    printf( "Info: Found '%s'\n", vol_label );
-                }
+				if ( !hdrIndx )
+				{
+					retv = ssnamelen;
+					cp = strchr(ssname, '.');
+					if ( cp )
+					{
+						retv = cp - ssname;
+					}
+					strncpy(vol_label+4,ssname,retv);
+					vol_label[4+retv] = ' ';
+					if ( verbose )
+					{
+						printf( "Info: Found '%s'\n", vol_label );
+					}
+				}
+				else if ( verbose )
+					printf( "Info: Found \"%s\"\n", vol_label );
             }
-			/*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777*/
-			/*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789*/
-/*                             "HDR1121589.SUTTLESDELxxx   00010081000100 89349 00000 000000DECVMSBACKUP" */
+			/*                  00000000001111111111222222222233333333334444444444555555555566666666667777777777  */
+			/*                  01234567890123456789012345678901234567890123456789012345678901234567890123456789  */
+			/*                 "VOL186APRM                           D%C                                        " */
+			/*                 "HDR1121589.SUTTLESDELxxx   00010081000100 89349 00000 000000DECVMSBACKUP        " */
             if ( !strncmp(buff,"HDR1",4) )
             {
-				if ( !strncmp(buff+4, lssname, MAX_SSNAME_LEN) )
-                {
-                    if ( !vol_label[0] )
-                    {
-                        printf( "Error: No VOL1 label found before HDR1%s\n", ssname );
-                        return 1;
-                    }
-                    write_ss(inp);
-                    fclose(inp);
-                    return 0;
-                }
+				++hdr1Count;
+				if ( !hdrIndx )
+				{
+					if ( !strncmp(buff + 4, lssname, MAX_SSNAME_LEN) )
+					{
+						if ( !vol_label[0] )
+						{
+							printf( "Error: No VOL1 label found before HDR1%s\n", ssname );
+							return 1;
+						}
+						write_ss(inp, 0);
+						fclose(inp);
+						return 0;
+					}
+				}
+				else if ( hdr1Count == hdrIndx )
+				{
+					char *cp;
+					if ( !vol_label[0] )
+					{
+						printf("Error: No VOL1 label found before HDR1 index %d\n", hdr1Count);
+						return 1;
+					}
+					retv = ssnamelen;
+					cp = strchr(ssname, '.');
+					if ( cp )
+					{
+						retv = cp - ssname;
+					}
+					memcpy(ssname, buff + 4, MAX_SSNAME_LEN);
+					ssname[MAX_SSNAME_LEN] = 0;
+					cp = ssname;
+					while ( *cp && *cp != ' ' )
+						++cp;
+					*cp = 0;
+					if ( write_ss(inp, hdrIndx) )
+					{
+						fclose(inp);
+						return 1;
+					}
+					fclose(inp);
+					return 0;
+				}
             }
         }
 	}
@@ -481,7 +496,10 @@ int main( int argc, char *argv[] )
             sizeof(bc), retv, strerror(errno) );
 		return 8;
 	}
-    printf("Error: Didn't find saveset named '%s'\n", ssname );
+	if ( !hdrIndx )
+		printf("Error: Didn't find saveset named '%s'\n", ssname);
+	else
+		printf("Error: Last HDR1 was number %d. Didn't find HDR1 at index %d\n", hdr1Count, hdrIndx);
 	fclose(inp);
-	return 0;
+	return 10;
 }

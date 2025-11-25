@@ -42,7 +42,7 @@ endif
 
 #
 
-default: vmsbackup$(EXE) dmp_tfile$(EXE) ext_tfile$(EXE) $(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP)
+default: vmsbackup$(EXE) dmp_tfile$(EXE) extss$(EXE) $(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP)
 
 %.o : %.c Makefile.common
 	$(CC) -c $(CFLAGS) $<
@@ -53,16 +53,19 @@ cp_tape$(EXE): cp_tape.o
 	$(CC) $(LFLAGS) -o $@ $<
 dmp_tfile$(EXE): dmp_tfile.o
 	$(CC) $(LFLAGS) -o $@ $<
-ext_tfile$(EXE): ext_tfile.o
+extss$(EXE): extss.o
 	$(CC) $(LFLAGS) -o $@ $<
+#ext_tfile$(EXE): ext_tfile.o
+#	$(CC) $(LFLAGS) -o $@ $<
 unpack_tap$(EXE): unpack_tap.o
 	$(CC) $(LFLAGS) -o $@ $<
 
 #install:
 #	install -m $(MODE) -o $(OWNER) -s vmsbackup $(BINDIR)	
 #	cp vmsbackup.1 $(MANDIR)/vmsbackup.$(MANSEC)
+
 clean:
-	$(RM) vmsbackup$(EXE) ext_tfile$(EXE) cp_tape$(EXE) dmp_tfile$(EXE) unpack_tap$(EXE) *.o core
+	$(RM) vmsbackup$(EXE) extss$(EXE) cp_tape$(EXE) dmp_tfile$(EXE) unpack_tap$(EXE) *.o core
 
 #shar:
 #	shar -a README vmsbackup.1 Makefile vmsbackup.c match.c \

@@ -1044,7 +1044,11 @@ static FILE *openfile ( struct file_details *file )
 	{
 		printf ( "extract %s [ny]", p );
 		fflush ( stdout );
-		fgets ( ans, sizeof ( ans ), stdin );
+		if ( !fgets ( ans, sizeof ( ans ), stdin ) )
+		{
+			perror("Failed to read from stdin");
+			exit(1);
+		}
 		if ( *ans != 'y' )
 			procf = 0;
 	}

@@ -30,7 +30,12 @@ int main( int argc, char *argv[] )
     unsigned long total = 0;
     const char *dst = "/tmp/tape";
 
-    fd = open( "/dev/st0", O_RDONLY );
+	if ( sizeof(int) != 4 )
+	{
+		fprintf(stderr, "This program has to be compiled such that sizeof(int) == 4. Currently is %d\n", (int)sizeof(int));
+		return 1;
+	}
+	fd = open("/dev/st0", O_RDONLY);
     if ( fd < 0 )
     {
         perror( "Unable to open /dev/st0" );
@@ -71,13 +76,13 @@ int main( int argc, char *argv[] )
     outfd = creat( dst, 0664 );
     if ( outfd < 0 )
     {
-	sprintf( buff, "Unable to open %s\n", dst );
+		sprintf( buff, "Unable to open %s\n", dst );
         perror( buff );
         return 5;
     }
     while ( 1 )
     {
-        unsigned long bcnt;
+        int bcnt;
         char hdr[50];
         sts = read( fd, buff, sizeof(buff) );
         if ( sts < 0 )
@@ -85,7 +90,7 @@ int main( int argc, char *argv[] )
             perror( "Error reading /dev/st0" );
             return 2;
         }
-	total += sts;
+		total += sts;
         if ( sts == 80 )
         {
             int ii;
@@ -99,26 +104,33 @@ int main( int argc, char *argv[] )
             printf( "Read %6d bytes: \"%s\"\n", sts, hdr );
         }
         else
-	{
-#if 0
-	    if ( !sts )
-		printf( "Found tape mark.\n" );
-//	    printf( "Read %6d bytes.\n", sts );
-#endif
-	}
-        bcnt = sts;
-        write( outfd, &bcnt, sizeof(bcnt) );
-        if ( sts ) 
-	    write( outfd, buff, sts );
-	tape_marks <<= 1;
-	if ( !sts )
-	{
-	    tape_marks |= 1;
-	    if ( (tape_marks&3) == 3 )	/* two tape marks in a row is EOT */
-	    {
-		break;
-	    }
-	}
+		{
+		}
+		bcnt = sts;
+		sts = write( outfd, &bcnt, sizeof(bcnt) );
+		if ( sts == (int)sizeof(bcnt) && bcnt )
+		{
+			bcnt = write(outfd, buff, sts);
+			if ( bcnt != sts )
+			{
+				perror("Failed to write record data to output");
+				exit(1);
+			}
+		}
+		else
+		{
+			perror("Failed to write record byte count to output");
+			exit(1);
+		}
+		tape_marks <<= 1;
+		if ( !bcnt )
+		{
+			tape_marks |= 1;
+			if ( (tape_marks&3) == 3 )	/* two tape marks in a row is EOT */
+			{
+				break;
+			}
+		}
     }
     close( fd );
     close( outfd );
