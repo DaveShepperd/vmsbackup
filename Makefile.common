@@ -27,12 +27,12 @@ ifeq ($(HAVE_MTIO),1)
 LIBS += -lrmt   			# remote magtape library
 endif
 
-ifndef NO_CP_TAPE
-ALSO_CP_TAPE = cp_tape$(EXE)
-endif
-ifndef NO_UNPACK_TAP
-ALSO_UNPACK_TAP = unpack_tap$(EXE)
-endif
+#ifndef NO_CP_TAPE
+#ALSO_CP_TAPE = cp_tape$(EXE)
+#endif
+#ifndef NO_UNPACK_TAP
+#ALSO_UNPACK_TAP = unpack_tap$(EXE)
+#endif
 
 #OWNER = tar			# user for remote tape access
 #MODE = 4755
@@ -42,23 +42,23 @@ endif
 
 #
 
-default: vmsbackup$(EXE) dmp_tfile$(EXE) extss$(EXE) $(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP)
+default: vmsbackup$(EXE) dmp_tfile$(EXE) extss$(EXE) #$(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP)
 
 %.o : %.c Makefile.common
 	$(CC) -c $(CFLAGS) $<
 
 vmsbackup$(EXE): vmsbackup.o match.o
 	$(CC) $(LFLAGS) -o $@ $^
-cp_tape$(EXE): cp_tape.o
-	$(CC) $(LFLAGS) -o $@ $<
+#cp_tape$(EXE): cp_tape.o
+#	$(CC) $(LFLAGS) -o $@ $<
 dmp_tfile$(EXE): dmp_tfile.o
 	$(CC) $(LFLAGS) -o $@ $<
 extss$(EXE): extss.o
 	$(CC) $(LFLAGS) -o $@ $<
 #ext_tfile$(EXE): ext_tfile.o
 #	$(CC) $(LFLAGS) -o $@ $<
-unpack_tap$(EXE): unpack_tap.o
-	$(CC) $(LFLAGS) -o $@ $<
+#unpack_tap$(EXE): unpack_tap.o
+#	$(CC) $(LFLAGS) -o $@ $<
 
 #install:
 #	install -m $(MODE) -o $(OWNER) -s vmsbackup $(BINDIR)	
