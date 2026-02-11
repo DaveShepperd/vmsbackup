@@ -105,21 +105,21 @@ int main( int argc, char *argv[] )
         }
 		bcnt = sts;
 		sts = write( outfd, &bcnt, sizeof(bcnt) );
-		if ( (sts == (int)sizeof(bcnt)) && bcnt )
+		if ( (sts != (int)sizeof(bcnt)) )
 		{
-			bcnt = write(outfd, buff, sts);
+			fprintf(stderr, "Failed to write record byte count to output, sts=%d (s/b 4), bcnt=%d, errno: %s\n",
+					sts, bcnt, strerror(errno));
+			exit(1);
+		}
+		if ( bcnt )
+		{
+			sts = write(outfd, buff, bcnt);
 			if ( bcnt != sts )
 			{
 				fprintf(stderr, "Failed to write record data to output. sts=%d, bcnt=%d (they should match) errno: %s\n",
 						sts, bcnt, strerror(errno));
 				exit(1);
 			}
-		}
-		else
-		{
-			fprintf(stderr, "Failed to write record byte count to output, sts=%d, bcnt=%d (both s/b 4), errno: %s\n",
-					sts, bcnt, strerror(errno));
-			exit(1);
 		}
 		tape_marks <<= 1;
 		if ( !bcnt )
