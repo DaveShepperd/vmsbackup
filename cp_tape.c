@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <sys/mtio.h>
 #include <errno.h>
+#include <getopt.h>
 
 /* Program used to copy the images from tape to disk. */
 
@@ -22,92 +23,131 @@
 
 static char buff[128*1024];
 
-int main( int argc, char *argv[] )
+static int help_em(const char *imageName)
 {
-    int sts,fd,outfd;
-    struct mtget mtsts;
-    struct mtop ops;
-    int tape_marks = 0;
-    unsigned long total = 0;
-    const char *dst = "/tmp/tape";
+	fprintf(stderr, "Usage: %s [-l n][-s][-t dvc] <path>\n"
+			"Where:\n"
+			"<path>  - points to output file\n"
+			"-l n    - the is the number of records copied before emitting a message\n"
+			"-s      - indicate to make output image compatible with SIMH (default is Atari format)\n"
+			"-t dvc  - set the path to tape drive (default /dev/st0)\n"
+			,imageName);
+	return 1;
+}
 
+int main(int argc, char *argv[])
+{
+	int sts, fd, outfd;
+	struct mtget mtsts;
+	struct mtop ops;
+	int opt, simh=0, tape_marks = 0, records=0;
+	int recordLimit=256;
+	unsigned long total = 0;
+	const char *dst = "/tmp/tape", *imgName;
+	const char *tapeDrive = "/dev/st0";
+	
 	if ( sizeof(int) != 4 )
 	{
 		fprintf(stderr, "This program has to be compiled such that sizeof(int) == 4. Currently is %d\n", (int)sizeof(int));
 		return 1;
 	}
-	fd = open("/dev/st0", O_RDONLY);
-    if ( fd < 0 )
-    {
-        fprintf(stderr, "Unable to open /dev/st0: %s\n", strerror(errno) );
-        return 1;
-    }
-    sts = ioctl( fd, MTIOCGET, &mtsts );
-    if ( sts < 0 )
-    {
-        fprintf(stderr, "Unable to MTIOCGET to /dev/st0: %s\n", strerror(errno) );
-        return 3;
-    }
-    printf( "Tape status:\nType: %08lX\n", mtsts.mt_type );
-    printf( "resid: %08lX\n", mtsts.mt_resid );
-    printf( "dsreg: %08lX\n", mtsts.mt_dsreg );
-    printf( "   blksize: %ld, density: %ld\n", 
-           (mtsts.mt_dsreg&MT_ST_BLKSIZE_MASK) >> MT_ST_BLKSIZE_SHIFT,
-           (mtsts.mt_dsreg&MT_ST_DENSITY_MASK) >> MT_ST_DENSITY_SHIFT );
-    printf( "gstat: %08lX\n", mtsts.mt_gstat );
-    printf( "   EOF: %s\n", GMT_EOF( mtsts.mt_gstat ) ? "Yes" : "No " );
-    printf( "   BOT: %s\n", GMT_BOT( mtsts.mt_gstat ) ? "Yes" : "No " );
-    printf( "   EOT: %s\n", GMT_EOT( mtsts.mt_gstat ) ? "Yes" : "No " );
-    printf( "   SM:  %s\n", GMT_SM(  mtsts.mt_gstat ) ? "Yes" : "No " );
-    printf( "   EOD: %s\n", GMT_EOD( mtsts.mt_gstat ) ? "Yes" : "No " );
-    printf( "   WPT: %s\n", GMT_WR_PROT( mtsts.mt_gstat ) ? "Yes" : "No " );
-    printf( "erreg: %08lX\n", mtsts.mt_erreg );
-    printf( "fileno: %d\n", mtsts.mt_fileno );
-    printf( "blkno: %d\n", mtsts.mt_blkno );
-    ops.mt_op = MTSETBLK;
-    ops.mt_count = 0;
-    sts = ioctl( fd, MTIOCTOP, &ops );
-    if ( sts < 0 )
-    {
-        fprintf(stderr, "Unable to set to variable blocksize: %s\n", strerror(errno) );
-        return 4;
-    }
-    if ( argc > 1 )
-	dst = argv[1];
-    outfd = creat( dst, 0664 );
-    if ( outfd < 0 )
-    {
-		fprintf( stderr, "Unable to open %s: %s\n", dst, strerror(errno) );
-        return 5;
-    }
-    while ( 1 )
-    {
-        int bcnt;
-        char hdr[50];
-        sts = read( fd, buff, sizeof(buff) );
-        if ( sts < 0 )
-        {
-            fprintf(stderr, "Error reading /dev/st0: %s\n", strerror(errno) );
-            return 2;
-        }
+	while ( (opt = getopt(argc, argv, "l:st:")) != -1 )
+	{
+		switch (opt)
+		{
+		case 'l':
+			recordLimit = atoi(optarg);
+			break;
+		case 's':
+			simh = 1;
+			break;
+		case 't':
+			tapeDrive = optarg;
+			break;
+		default: /* '?' */
+			return help_em(argv[0]);
+		}
+	}
+	imgName = strrchr(argv[0],'/');
+	if ( !imgName )
+		imgName = argv[0];
+	else
+		++imgName;
+	printf("%s version 1.1\n", imgName);
+	if ( optind >= argc  )
+		return help_em(imgName);
+	fd = open(tapeDrive, O_RDONLY);
+	if ( fd < 0 )
+	{
+		fprintf(stderr, "Unable to open %s: %s\n", tapeDrive, strerror(errno));
+		return 1;
+	}
+	sts = ioctl(fd, MTIOCGET, &mtsts);
+	if ( sts < 0 )
+	{
+		fprintf(stderr, "Unable to MTIOCGET to %s: %s\n", tapeDrive, strerror(errno));
+		return 3;
+	}
+	printf("Tape status:\nType: %08lX\n", mtsts.mt_type);
+	printf("resid: %08lX\n", mtsts.mt_resid);
+	printf("dsreg: %08lX\n", mtsts.mt_dsreg);
+	printf("   blksize: %ld, density: %ld\n",
+		   (mtsts.mt_dsreg & MT_ST_BLKSIZE_MASK) >> MT_ST_BLKSIZE_SHIFT,
+		   (mtsts.mt_dsreg & MT_ST_DENSITY_MASK) >> MT_ST_DENSITY_SHIFT);
+	printf("gstat: %08lX\n", mtsts.mt_gstat);
+	printf("   EOF: %s\n", GMT_EOF(mtsts.mt_gstat) ? "Yes" : "No ");
+	printf("   BOT: %s\n", GMT_BOT(mtsts.mt_gstat) ? "Yes" : "No ");
+	printf("   EOT: %s\n", GMT_EOT(mtsts.mt_gstat) ? "Yes" : "No ");
+	printf("   SM:  %s\n", GMT_SM(mtsts.mt_gstat) ? "Yes" : "No ");
+	printf("   EOD: %s\n", GMT_EOD(mtsts.mt_gstat) ? "Yes" : "No ");
+	printf("   WPT: %s\n", GMT_WR_PROT(mtsts.mt_gstat) ? "Yes" : "No ");
+	printf("erreg: %08lX\n", mtsts.mt_erreg);
+	printf("fileno: %d\n", mtsts.mt_fileno);
+	printf("blkno: %d\n", mtsts.mt_blkno);
+	ops.mt_op = MTSETBLK;
+	ops.mt_count = 0;
+	sts = ioctl(fd, MTIOCTOP, &ops);
+	if ( sts < 0 )
+	{
+		fprintf(stderr, "Unable to set to variable blocksize: %s\n", strerror(errno));
+		return 4;
+	}
+	if ( argc > 1 )
+		dst = argv[1];
+	outfd = creat(dst, 0664);
+	if ( outfd < 0 )
+	{
+		fprintf(stderr, "Unable to open %s: %s\n", dst, strerror(errno));
+		return 5;
+	}
+	while ( 1 )
+	{
+		int bcnt;
+		char hdr[50];
+		sts = read(fd, buff, sizeof(buff));
+		if ( sts < 0 )
+		{
+			fprintf(stderr, "Error reading %s: %s\n", tapeDrive, strerror(errno));
+			return 2;
+		}
 		total += sts;
-        if ( sts == 80 )
-        {
-            int ii;
-            memcpy( hdr, buff, sizeof(hdr)-1 );
-            for ( ii=0; ii < sizeof(hdr)-1; ++ii )
-            {
-                if ( !isprint( hdr[ii] ) )
-                    hdr[ii] = '.';
-            }
-            hdr[(int)sizeof(hdr)-1] = 0;
-            printf( "Read %6d bytes: \"%s\"\n", sts, hdr );
-        }
+		if ( sts == 80 )
+		{
+			int ii;
+			memcpy(hdr, buff, sizeof(hdr) - 1);
+			for ( ii = 0; ii < sizeof(hdr) - 1; ++ii )
+			{
+				if ( !isprint(hdr[ii]) )
+					hdr[ii] = '.';
+			}
+			hdr[(int)sizeof(hdr) - 1] = 0;
+			printf("Read %6d bytes: \"%s\"\n", sts, hdr);
+		}
 		bcnt = sts;
-		sts = write( outfd, &bcnt, sizeof(bcnt) );
+		sts = write(outfd, &bcnt, sizeof(bcnt));
 		if ( (sts != (int)sizeof(bcnt)) )
 		{
-			fprintf(stderr, "Failed to write record byte count to output, sts=%d (s/b 4), bcnt=%d, errno: %s\n",
+			fprintf(stderr, "Failed to write leading record byte count to output, sts=%d (s/b 4), bcnt=%d, errno: %s\n",
 					sts, bcnt, strerror(errno));
 			exit(1);
 		}
@@ -120,19 +160,34 @@ int main( int argc, char *argv[] )
 						sts, bcnt, strerror(errno));
 				exit(1);
 			}
+			if ( simh )
+			{
+				sts = write(outfd, &bcnt, sizeof(bcnt));
+				if ( (sts != (int)sizeof(bcnt)) )
+				{
+					fprintf(stderr, "Failed to write trailing record byte count to output, sts=%d (s/b 4), bcnt=%d, errno: %s\n",
+							sts, bcnt, strerror(errno));
+					exit(1);
+				}
+			}
+			++records;
+			if ( !(records % recordLimit) )
+				printf("Record count so far: %d\n", records);
 		}
+		else
+			printf("Found tape mark\n");
 		tape_marks <<= 1;
 		if ( !bcnt )
 		{
 			tape_marks |= 1;
-			if ( (tape_marks&3) == 3 )	/* two tape marks in a row is EOT */
+			if ( (tape_marks & 3) == 3 )  /* two tape marks in a row is EOT */
 			{
 				break;
 			}
 		}
-    }
-    close( fd );
-    close( outfd );
-    printf( "Read a total of %ld bytes\n", total );
-    return 0;
+	}
+	close(fd);
+	close(outfd);
+	printf("Read a total of %ld bytes, %d records\n", total, records);
+	return 0;
 }
