@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/mtio.h>
+#include <errno.h>
 
 /* Program used to copy the images from tape to disk. */
 
@@ -38,13 +39,13 @@ int main( int argc, char *argv[] )
 	fd = open("/dev/st0", O_RDONLY);
     if ( fd < 0 )
     {
-        perror( "Unable to open /dev/st0" );
+        fprintf(stderr, "Unable to open /dev/st0: %s\n", strerror(errno) );
         return 1;
     }
     sts = ioctl( fd, MTIOCGET, &mtsts );
     if ( sts < 0 )
     {
-        perror( "Unable to MTIOCGET to /dev/st0" );
+        fprintf(stderr, "Unable to MTIOCGET to /dev/st0: %s\n", strerror(errno) );
         return 3;
     }
     printf( "Tape status:\nType: %08lX\n", mtsts.mt_type );
@@ -68,7 +69,7 @@ int main( int argc, char *argv[] )
     sts = ioctl( fd, MTIOCTOP, &ops );
     if ( sts < 0 )
     {
-        perror( "Unable to set to variable blocksize." );
+        fprintf(stderr, "Unable to set to variable blocksize: %s\n", strerror(errno) );
         return 4;
     }
     if ( argc > 1 )
@@ -76,8 +77,7 @@ int main( int argc, char *argv[] )
     outfd = creat( dst, 0664 );
     if ( outfd < 0 )
     {
-		sprintf( buff, "Unable to open %s\n", dst );
-        perror( buff );
+		fprintf( stderr, "Unable to open %s: %s\n", dst, strerror(errno) );
         return 5;
     }
     while ( 1 )
@@ -87,7 +87,7 @@ int main( int argc, char *argv[] )
         sts = read( fd, buff, sizeof(buff) );
         if ( sts < 0 )
         {
-            perror( "Error reading /dev/st0" );
+            fprintf(stderr, "Error reading /dev/st0: %s\n", strerror(errno) );
             return 2;
         }
 		total += sts;
@@ -103,23 +103,22 @@ int main( int argc, char *argv[] )
             hdr[(int)sizeof(hdr)-1] = 0;
             printf( "Read %6d bytes: \"%s\"\n", sts, hdr );
         }
-        else
-		{
-		}
 		bcnt = sts;
 		sts = write( outfd, &bcnt, sizeof(bcnt) );
-		if ( sts == (int)sizeof(bcnt) && bcnt )
+		if ( (sts == (int)sizeof(bcnt)) && bcnt )
 		{
 			bcnt = write(outfd, buff, sts);
 			if ( bcnt != sts )
 			{
-				perror("Failed to write record data to output");
+				fprintf(stderr, "Failed to write record data to output. sts=%d, bcnt=%d (they should match) errno: %s\n",
+						sts, bcnt, strerror(errno));
 				exit(1);
 			}
 		}
 		else
 		{
-			perror("Failed to write record byte count to output");
+			fprintf(stderr, "Failed to write record byte count to output, sts=%d, bcnt=%d (both s/b 4), errno: %s\n",
+					sts, bcnt, strerror(errno));
 			exit(1);
 		}
 		tape_marks <<= 1;
