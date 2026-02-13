@@ -9,6 +9,7 @@
 
 static int verbose;
 static int simhMode;
+static int inputSimhMode;
 static char buff[65536];
 #define MAX_SSNAME_LEN (17)
 static char ssname[MAX_SSNAME_LEN+1];
@@ -20,11 +21,12 @@ static char hdr1[81], hdr2[81];
 
 static void help_em( FILE *opf, const char *title )
 {
-	fprintf(opf, "Usage: %s [-sv] ss_name datafile\n"
+	fprintf(opf, "Usage: %s [-sSv] ss_name datafile\n"
 			"Extracts saveset 'ss_name' from 'datafile' into <ssname>[.data|.simh]\n"
 			"or if ss_name is a number 1<=num<=99, extracts num HDR1's entry in 'datafile' into <num>_<name>[.data|.simh]\n"
 			"Where:\n"
 			"-s       means make output simh format (selects output file extension as .simh)\n"
+			"-S       means interpret input file in simh format.\n"
 			"-v       set verbose\n"
 			"ss_name  is the saveset name to extract or a number between 1 and 99\n"
 			"datafile filename of .data file\n"
@@ -147,6 +149,17 @@ static int write_ss( FILE *inp, int hdrIndx )
                     retv, bc );
                 return -1;
             }
+			if ( inputSimhMode )
+			{
+				int trailBc;
+				retv = fread( &trailBc, 1, sizeof(trailBc), inp);
+				if ( retv != (int)sizeof(trailBc) || trailBc != bc )
+				{
+					printf( "Error: read of trailing byte count mismatch. Found %d bytes, expected %d, bc=%d, trailBc=%d\n",
+						retv, (int)sizeof(trailBc), bc, trailBc );
+					return -1;
+				}
+			}
         }
         switch (state ) {
         case 0:
@@ -345,12 +358,15 @@ int main( int argc, char *argv[] )
     char *cp, lssname[18];
 	const char *title = argv[0], *dataFileName;
 	
-	while ( (opt = getopt(argc, argv, "sv")) != -1 )
+	while ( (opt = getopt(argc, argv, "sSv")) != -1 )
 	{
 		switch (opt)
 		{
 		case 's':
 			simhMode = 1;
+			break;
+		case 'S':
+			inputSimhMode = 1;
 			break;
 		case 'v':
 			verbose = 1;
@@ -414,6 +430,17 @@ int main( int argc, char *argv[] )
                     retv, bc );
                 return 5;
             }
+			if ( inputSimhMode )
+			{
+				int trailBc;
+				retv = fread( &trailBc, 1, sizeof(trailBc), inp);
+				if ( retv != (int)sizeof(trailBc) || trailBc != bc )
+				{
+					printf( "Error: read of trailing byte count mismatch. Found %d bytes, expected %d, bc=%d, trailBc=%d\n",
+						retv, (int)sizeof(trailBc), bc, trailBc );
+					return 11;
+				}
+			}
         }
         if ( bc == 80 )
         {

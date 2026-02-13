@@ -277,6 +277,10 @@
 			Name="Source Files"
 			Filters="*.c;*.C;*.cc;*.cpp;*.cp;*.cxx;*.c++;*.prg;*.pas;*.dpr;*.asm;*.s;*.bas;*.java;*.cs;*.sc;*.scala;*.e;*.cob;*.html;*.rc;*.tcl;*.py;*.pl;*.d;*.m;*.mm;*.go;*.groovy;*.gsh"
 			GUID="{77ABED19-9FE1-49AC-9890-B79DD8B92417}">
+			<F N="cp_tape.c"/>
+			<F N="data2simh.c"/>
+			<F N="dmp_tfile.c"/>
+			<F N="extss.c"/>
 			<F N="match.c"/>
 			<F N="vmsbackup.c"/>
 			<F N="vmsbackup.html"/>

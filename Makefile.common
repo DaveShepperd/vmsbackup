@@ -30,9 +30,12 @@ endif
 ifndef NO_CP_TAPE
 ALSO_CP_TAPE = cp_tape$(EXE)
 endif
-#ifndef NO_UNPACK_TAP
-#ALSO_UNPACK_TAP = unpack_tap$(EXE)
-#endif
+ifndef NO_DATA2SIMH
+ALSO_DATA2SIMH = data2simh$(EXE)
+endif
+ifndef NO_UNPACK_TAP
+ALSO_UNPACK_TAP = unpack_tap$(EXE)
+endif
 
 #OWNER = tar			# user for remote tape access
 #MODE = 4755
@@ -42,7 +45,7 @@ endif
 
 #
 
-default: vmsbackup$(EXE) dmp_tfile$(EXE) extss$(EXE) $(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP)
+default: vmsbackup$(EXE) dmp_tfile$(EXE) extss$(EXE) $(ALSO_CP_TAPE) $(ALSO_UNPACK_TAP) $(ALSO_DATA2SIMH)
 
 %.o : %.c Makefile.common
 	$(CC) -c $(CFLAGS) $<
@@ -55,17 +58,19 @@ dmp_tfile$(EXE): dmp_tfile.o
 	$(CC) $(LFLAGS) -o $@ $<
 extss$(EXE): extss.o
 	$(CC) $(LFLAGS) -o $@ $<
-#ext_tfile$(EXE): ext_tfile.o
-#	$(CC) $(LFLAGS) -o $@ $<
-#unpack_tap$(EXE): unpack_tap.o
-#	$(CC) $(LFLAGS) -o $@ $<
+data2simh$(EXE): data2simh.o
+	$(CC) $(LFLAGS) -o $@ $<
+ext_tfile$(EXE): ext_tfile.o
+	$(CC) $(LFLAGS) -o $@ $<
+unpack_tap$(EXE): unpack_tap.o
+	$(CC) $(LFLAGS) -o $@ $<
 
 #install:
 #	install -m $(MODE) -o $(OWNER) -s vmsbackup $(BINDIR)	
 #	cp vmsbackup.1 $(MANDIR)/vmsbackup.$(MANSEC)
 
 clean:
-	$(RM) vmsbackup$(EXE) extss$(EXE) cp_tape$(EXE) dmp_tfile$(EXE) unpack_tap$(EXE) *.o core
+	$(RM) vmsbackup$(EXE) extss$(EXE) cp_tape$(EXE) dmp_tfile$(EXE) unpack_tap$(EXE) data2simh$(EXE) *.o core
 
 #shar:
 #	shar -a README vmsbackup.1 Makefile vmsbackup.c match.c \

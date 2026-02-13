@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
 		imgName = argv[0];
 	else
 		++imgName;
-	printf("%s version 1.1\n", imgName);
+	printf("%s version 1.2\n", imgName);
 	if ( optind >= argc  )
 		return help_em(imgName);
 	fd = open(tapeDrive, O_RDONLY);
@@ -112,8 +112,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Unable to set to variable blocksize: %s\n", strerror(errno));
 		return 4;
 	}
-	if ( argc > 1 )
-		dst = argv[1];
+	if ( optind < argc )
+		dst = argv[optind];
 	outfd = creat(dst, 0664);
 	if ( outfd < 0 )
 	{

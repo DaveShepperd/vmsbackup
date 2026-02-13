@@ -1738,7 +1738,7 @@ void process_summary ( unsigned char *buffer, unsigned short rsize )
 				if ( dsize == 4 )
 				{
 					unsigned long id;
-					id = GETU32( text );
+					id = getu32( text );
 					printf( "%02d: CPUPID:       0x%08lX\n", subf, id );
 				}
 				continue;
@@ -3128,7 +3128,7 @@ static struct option long_options[] =
 
 void usage ( const char *progname, int full )
 {
-	printf ("%s version 3.12, May 2024\n", progname );
+	printf ("%s version 3.13, Feb 2026\n", progname );
 	printf ( "Usage:  %s -{tx}[cdeiIhw?][-n <name>][-s <num>][-v <num>] -f <file>\n",
 			 progname );
 	if ( full )
