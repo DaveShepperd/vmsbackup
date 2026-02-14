@@ -7,6 +7,10 @@
 #include <errno.h>
 #include <getopt.h>
 
+#ifndef O_BINARY
+#define O_BINARY (0)
+#endif
+
 /* Program used to convert a .data format file to simh format. */
 
 /* Usage: data2simh input output */
@@ -73,18 +77,18 @@ int main(int argc, char *argv[])
 		imgName = argv[0];
 	else
 		++imgName;
-	printf("%s version 1.0\n", imgName);
+	printf("%s version 1.1\n", imgName);
 	if ( optind >= argc-1  )
 		return help_em(imgName);
 	src = argv[optind];
 	dst = argv[optind+1];
-	infd = open(src, O_RDONLY);
+	infd = open(src, O_RDONLY|O_BINARY);
 	if ( infd < 0 )
 	{
 		fprintf(stderr, "Unable to open %s: %s\n", src, strerror(errno));
 		return 1;
 	}
-	outfd = creat(dst, 0664);
+	outfd = open(dst, O_CREAT|O_BINARY|O_WRONLY, 0664);
 	if ( outfd < 0 )
 	{
 		fprintf(stderr, "Unable to open %s: %s\n", dst, strerror(errno));
