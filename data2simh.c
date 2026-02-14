@@ -49,6 +49,7 @@ int main(int argc, char *argv[])
 	int sts, infd, outfd;
 	int verbose=0, opt, tape_marks = 0, records=0;
 	int recordLimit=256;
+	int maxRecordLength=0;
 	unsigned long total = 0;
 	const char *src, *dst, *imgName;
 	
@@ -77,7 +78,7 @@ int main(int argc, char *argv[])
 		imgName = argv[0];
 	else
 		++imgName;
-	printf("%s version 1.1\n", imgName);
+	printf("%s version 1.2\n", imgName);
 	if ( optind >= argc-1  )
 		return help_em(imgName);
 	src = argv[optind];
@@ -104,11 +105,13 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "Error reading %s: %s\n", src, strerror(errno));
 			return 2;
 		}
-		if ( bcnt > 32767 )
+		if ( bcnt > 0xFFFF )
 		{
 			fprintf(stderr, "Error in %s: Record length of %d is too big.\n", src, bcnt);
 			return 3;
 		}
+		if ( bcnt > maxRecordLength )
+			maxRecordLength = bcnt;
 		sts = write(outfd, &bcnt, sizeof(bcnt));
 		if ( (sts != (int)sizeof(bcnt)) )
 		{
@@ -169,6 +172,6 @@ int main(int argc, char *argv[])
 	}
 	close(infd);
 	close(outfd);
-	printf("Read a total of %ld bytes, %d records\n", total, records);
+	printf("Read a total of %ld bytes, %d records, maxRecordLength=%d\n", total, records, maxRecordLength);
 	return 0;
 }
