@@ -29,6 +29,7 @@ static int help_em(const char *imageName)
 			"Where:\n"
 			"<path>  - points to output file\n"
 			"-l n    - the is the number of records copied before emitting a message\n"
+			"-m n    - set the number of consecutive tape marks that signal EOT (default=2)\n"
 			"-s      - indicate to make output image compatible with SIMH (default is Atari format)\n"
 			"-t dvc  - set the path to tape drive (default /dev/st0)\n"
 			,imageName);
@@ -37,7 +38,7 @@ static int help_em(const char *imageName)
 
 int main(int argc, char *argv[])
 {
-	int sts, fd, outfd;
+	int sts, fd, outfd, marks2EOT=2;
 	struct mtget mtsts;
 	struct mtop ops;
 	int opt, simh=0, tape_marks = 0, records=0;
@@ -51,12 +52,15 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "This program has to be compiled such that sizeof(int) == 4. Currently is %d\n", (int)sizeof(int));
 		return 1;
 	}
-	while ( (opt = getopt(argc, argv, "l:st:")) != -1 )
+	while ( (opt = getopt(argc, argv, "l:m:st:")) != -1 )
 	{
 		switch (opt)
 		{
 		case 'l':
 			recordLimit = atoi(optarg);
+			break;
+		case 'm':
+			marks2EOT = atoi(optarg);
 			break;
 		case 's':
 			simh = 1;
@@ -73,7 +77,7 @@ int main(int argc, char *argv[])
 		imgName = argv[0];
 	else
 		++imgName;
-	printf("%s version 1.2\n", imgName);
+	printf("%s version 1.3\n", imgName);
 	if ( optind >= argc  )
 		return help_em(imgName);
 	fd = open(tapeDrive, O_RDONLY);
@@ -104,6 +108,7 @@ int main(int argc, char *argv[])
 	printf("erreg: %08lX\n", mtsts.mt_erreg);
 	printf("fileno: %d\n", mtsts.mt_fileno);
 	printf("blkno: %d\n", mtsts.mt_blkno);
+	printf("marks2EOT: %d (number of consecutive tape marks signals end of tape)\n", marks2EOT);
 	ops.mt_op = MTSETBLK;
 	ops.mt_count = 0;
 	sts = ioctl(fd, MTIOCTOP, &ops);
@@ -179,8 +184,9 @@ int main(int argc, char *argv[])
 		tape_marks <<= 1;
 		if ( !bcnt )
 		{
+			int mask = (1<<marks2EOT)-1;
 			tape_marks |= 1;
-			if ( (tape_marks & 3) == 3 )  /* two tape marks in a row is EOT */
+			if ( (tape_marks & mask) == mask )  /* 'n' tape marks in a row is EOT */
 			{
 				break;
 			}
